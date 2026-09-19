@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Terminal, 
@@ -19,6 +19,23 @@ interface SetupGuideModalProps {
 
 export const SetupGuideModal: React.FC<SetupGuideModalProps> = ({ isOpen, onClose }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -49,37 +66,52 @@ service cloud.firestore {
 }`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#281e16]/65 backdrop-blur-sm overflow-y-auto">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 md:p-6 bg-[#281e16]/70 backdrop-blur-xs overscroll-contain"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div 
         id="modal-setup-deployment-guide"
-        className="relative w-full max-w-3xl my-8 bg-[#ffffff] border border-[#ded5c5] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 text-[#281e16]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-setup-title"
+        className="relative w-full max-w-3xl max-h-[92vh] sm:max-h-[88vh] flex flex-col bg-[#ffffff] border border-[#ded5c5] rounded-2xl shadow-2xl text-[#281e16] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
       >
-        {/* Close Button */}
-        <button
-          id="btn-close-setup-modal"
-          onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-lg text-[#7d6c5d] hover:text-[#281e16] hover:bg-[#f5efe4] transition-colors"
-          aria-label="Close"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        {/* Header */}
-        <div className="flex items-center gap-3 border-b border-[#ede5d8] pb-5">
-          <div className="w-10 h-10 rounded-xl bg-[#f0e6d6] border border-[#d8c8b4] flex items-center justify-center text-[#6b4423]">
-            <Server className="w-5 h-5" />
+        {/* Pinned Header */}
+        <div className="shrink-0 px-5 py-4 sm:px-8 sm:py-5 border-b border-[#ede5d8] bg-[#ffffff] flex items-center justify-between gap-3 z-10">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-[#f0e6d6] border border-[#d8c8b4] flex items-center justify-center text-[#6b4423] shrink-0">
+              <Server className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 id="modal-setup-title" className="text-base sm:text-lg font-bold text-[#281e16] truncate">
+                WinterBuild Setup & Settings Guide
+              </h2>
+              <p className="text-xs text-[#6e5d4f] truncate">
+                Simple steps to configure password, database, and hosting.
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-[#281e16]">
-              WinterBuild Setup & Settings Guide
-            </h2>
-            <p className="text-xs text-[#6e5d4f]">
-              Simple steps to change your password, connect a database, and manage your website.
-            </p>
-          </div>
+          <button
+            id="btn-close-setup-modal"
+            onClick={onClose}
+            className="p-2 rounded-xl text-[#7d6c5d] hover:text-[#281e16] hover:bg-[#faf6f0] transition-colors shrink-0"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Current Working Status */}
+        {/* Scrollable Content Body */}
+        <div 
+          className="flex-1 min-h-0 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6 space-y-6 overscroll-contain focus:outline-none"
+          tabIndex={0}
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
+          {/* Current Working Status */}
         <div className="p-4 rounded-xl bg-[#edf4ee] border border-[#cbe0ce] flex items-start gap-3">
           <ShieldCheck className="w-5 h-5 text-[#2d5c37] shrink-0 mt-0.5" />
           <div className="text-xs space-y-1">
@@ -166,8 +198,10 @@ service cloud.firestore {
           </ul>
         </div>
 
-        {/* Modal Action */}
-        <div className="flex justify-end pt-4 border-t border-[#ede5d8]">
+        </div>
+
+        {/* Pinned Modal Action Footer */}
+        <div className="shrink-0 px-6 py-3.5 sm:px-8 sm:py-4 border-t border-[#ede5d8] bg-[#faf7f2] flex justify-end z-10">
           <button
             id="btn-dismiss-setup-modal"
             onClick={onClose}

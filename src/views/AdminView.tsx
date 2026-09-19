@@ -22,7 +22,8 @@ import {
   Terminal,
   Layers,
   KeyRound,
-  Loader2
+  Loader2,
+  ArrowUp
 } from 'lucide-react';
 import { AppListing, AppCategory, APP_CATEGORIES, ApkDetectedInfo } from '../types';
 import { 
@@ -114,6 +115,47 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [apkUploadSuccess, setApkUploadSuccess] = useState<string | null>(null);
   const [apkUploadError, setApkUploadError] = useState<string | null>(null);
   const apkAbortControllerRef = useRef<AbortController | null>(null);
+  const modalScrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Prevent background page scrolling when Add App modal or Delete modal is open
+  useEffect(() => {
+    if (!isEditorOpen && !deletingApp) return;
+
+    const originalOverflow = document.body.style.overflow;
+    const originalPaddingRight = document.body.style.paddingRight;
+    
+    // Prevent layout shift from scrollbar disappearing
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isEditorOpen && !isSaving && !isUploadingApk) {
+        setIsEditorOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.body.style.paddingRight = originalPaddingRight;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isEditorOpen, deletingApp, isSaving, isUploadingApk]);
+
+  // Ensure modal scrolls to top when opened
+  useEffect(() => {
+    if (isEditorOpen) {
+      requestAnimationFrame(() => {
+        if (modalScrollContainerRef.current) {
+          modalScrollContainerRef.current.scrollTop = 0;
+          modalScrollContainerRef.current.focus();
+        }
+      });
+    }
+  }, [isEditorOpen]);
 
   // Field-specific validation errors for the editor modal
   const [fieldErrors, setFieldErrors] = useState<{
@@ -872,37 +914,91 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       {/* ==================== MODAL: ADD / EDIT APP ==================== */}
       {isEditorOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#281e16]/60 backdrop-blur-xs overflow-y-auto">
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 md:p-6 bg-[#281e16]/70 backdrop-blur-xs overscroll-contain"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isSaving && !isUploadingApk) {
+              setIsEditorOpen(false);
+            }
+          }}
+        >
           <div 
             id="modal-app-editor"
-            className="relative w-full max-w-3xl my-8 bg-[#ffffff] border border-[#ded5c5] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 text-[#4d3c2e]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-editor-title"
+            className="relative w-full max-w-3xl max-h-[92vh] sm:max-h-[88vh] flex flex-col bg-[#ffffff] border border-[#ded5c5] rounded-2xl shadow-2xl text-[#4d3c2e] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-[#ded5c5] pb-4">
-              <div>
-                <h2 className="text-lg font-bold text-[#281e16]">
+            {/* Pinned Header */}
+            <div className="shrink-0 px-5 py-4 sm:px-8 sm:py-5 border-b border-[#ded5c5] bg-[#ffffff] flex items-center justify-between gap-4 z-10">
+              <div className="min-w-0">
+                <h2 id="modal-editor-title" className="text-base sm:text-lg font-bold text-[#281e16] truncate">
                   {editingApp ? `Edit: ${editingApp.title}` : 'Add New App'}
                 </h2>
-                <p className="text-xs text-[#6e5d4f]">
-                  Fill in the app information and upload your files.
+                <p className="text-xs text-[#6e5d4f] truncate">
+                  Upload your APK file and configure app details.
                 </p>
               </div>
               <button
-                onClick={() => setIsEditorOpen(false)}
-                className="p-2 text-[#6e5d4f] hover:text-[#281e16] hover:bg-[#faf6f0] rounded-lg"
+                type="button"
+                id="btn-close-app-editor"
+                onClick={() => {
+                  if (!isSaving && !isUploadingApk) {
+                    setIsEditorOpen(false);
+                  }
+                }}
+                className="p-2 text-[#6e5d4f] hover:text-[#281e16] hover:bg-[#faf6f0] rounded-xl transition-colors shrink-0"
+                title="Close dialog"
+                aria-label="Close dialog"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {editorError && (
-              <div className="p-3.5 rounded-xl bg-[#fcf0f0] border border-[#f0c8c8] text-[#8e2a2a] text-xs flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-[#8e2a2a] shrink-0 mt-0.5" />
-                <span>{editorError}</span>
-              </div>
-            )}
+            {/* Form containing scrollable body and pinned footer */}
+            <form noValidate onSubmit={handleSaveApp} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              
+              {/* Scrollable Form Body */}
+              <div 
+                ref={modalScrollContainerRef}
+                tabIndex={0}
+                className="flex-1 min-h-0 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6 space-y-6 overscroll-contain focus:outline-none"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
+                {editorError && (
+                  <div className="p-3.5 rounded-xl bg-[#fcf0f0] border border-[#f0c8c8] text-[#8e2a2a] text-xs flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-[#8e2a2a] shrink-0 mt-0.5" />
+                    <span>{editorError}</span>
+                  </div>
+                )}
 
-            <form noValidate onSubmit={handleSaveApp} className="space-y-6">
+                {/* Quick Step Navigation Pill Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-[#faf6f0] border border-[#ded5c5] text-xs">
+                  <span className="font-semibold text-[#6e5d4f]">Quick Navigation:</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (modalScrollContainerRef.current) {
+                          modalScrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#ffffff] border border-[#ded5c5] text-[#281e16] hover:text-[#7c4d29] hover:border-[#7c4d29] font-medium text-[11px] transition-colors shadow-2xs"
+                    >
+                      Step 1: APK Upload
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        document.getElementById('section-step-2')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#ffffff] border border-[#ded5c5] text-[#281e16] hover:text-[#7c4d29] hover:border-[#7c4d29] font-medium text-[11px] transition-colors shadow-2xs"
+                    >
+                      Step 2: App Details
+                    </button>
+                  </div>
+                </div>
               
               {/* STEP 1: APK PACKAGE FILE (REQUIRED) */}
               <div 
@@ -1121,7 +1217,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </div>
 
               {/* STEP 2: OPTIONAL APP INFORMATION */}
-              <div className="p-5 rounded-2xl bg-[#faf7f2] border border-[#ded5c5] space-y-5">
+              <div id="section-step-2" className="p-5 rounded-2xl bg-[#faf7f2] border border-[#ded5c5] space-y-5">
                 <div className="border-b border-[#ded5c5] pb-3">
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded-full bg-[#e8decb] text-[#4d3c2e] font-bold text-[10px] uppercase tracking-wide">
@@ -1452,10 +1548,30 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <span>Mark as Verified Safe</span>
                   </label>
                 </div>
+
+                {/* Back to Step 1 shortcut */}
+                <div className="flex items-center justify-between pt-2 border-t border-[#ded5c5]">
+                  <span className="text-[11px] text-[#6e5d4f]">Need to re-upload APK or review top fields?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (modalScrollContainerRef.current) {
+                        modalScrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="text-xs text-[#7c4d29] hover:text-[#543318] font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ffffff] border border-[#ded5c5] hover:bg-[#f5eee3] hover:border-[#7c4d29] transition-colors shadow-2xs"
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" />
+                    <span>Back to Step 1 (Top)</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Submit / Cancel buttons */}
-              <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#ded5c5]">
+              {/* End of Scrollable Body */}
+              </div>
+
+              {/* Pinned Action Buttons Footer */}
+              <div className="shrink-0 px-5 py-3.5 sm:px-8 sm:py-4 border-t border-[#ded5c5] bg-[#faf7f2] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 z-10">
                 <div className="text-xs text-[#6e5d4f]">
                   {formApkUrl ? (
                     <span className="text-[#2d5c37] font-medium flex items-center gap-1.5">
@@ -1467,11 +1583,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-end gap-3 shrink-0">
                   <button
                     type="button"
                     onClick={() => setIsEditorOpen(false)}
-                    className="px-4 py-2.5 rounded-xl bg-[#f0e6d6] hover:bg-[#e4d6c2] text-[#4d3c2e] text-xs font-medium transition-colors border border-[#ded5c5]"
+                    className="px-4 py-2.5 rounded-xl bg-[#f0e6d6] hover:bg-[#e4d6c2] text-[#4d3c2e] text-xs font-semibold transition-colors border border-[#ded5c5]"
                   >
                     Cancel
                   </button>
@@ -1479,7 +1595,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     id="btn-publish-app-submit"
                     type="submit"
                     disabled={isSaving}
-                    className="px-6 py-2.5 rounded-xl bg-[#6b4423] hover:bg-[#543318] disabled:opacity-50 text-[#fdfcf9] text-xs font-bold transition-all shadow-xs flex items-center gap-2"
+                    className="px-6 py-2.5 rounded-xl bg-[#6b4423] hover:bg-[#543318] disabled:opacity-50 text-[#fdfcf9] text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2"
                   >
                     {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                     <span>{isSaving ? 'Saving...' : editingApp ? 'Save Changes' : 'Publish App'}</span>

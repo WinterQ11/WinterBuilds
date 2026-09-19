@@ -4,22 +4,43 @@ export type { UploadResult, ApkDetectedInfo };
 
 /**
  * Centralized API Base URL Configuration.
- * Uses VITE_API_BASE_URL from environment if defined.
- * If not set, defaults to empty string "" for local development (relative routes).
- * Trailing slashes are cleanly stripped.
+ * 
+ * Intelligent routing:
+ * 1. If running on same origin or in container/local environments (localhost, 127.0.0.1, *.run.app),
+ *    always prefer relative paths ("") so the co-located Express backend is reached directly.
+ * 2. If VITE_API_BASE_URL is explicitly set AND running on an external static domain (e.g. Cloudflare Pages),
+ *    use the configured remote backend URL.
+ * 3. Default to relative routes ("").
  */
-export const API_BASE_URL: string = (
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) || ''
-)
-  .trim()
-  .replace(/\/+$/, '');
+export function getApiBaseUrl(): string {
+  const envUrl = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '').trim().replace(/\/+$/, '');
+  
+  if (typeof window !== 'undefined' && window.location) {
+    const hostname = window.location.hostname;
+    // When running inside local dev or Cloud Run / AI Studio container environment,
+    // the backend is co-located on port 3000. Always prefer relative API routes.
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.endsWith('.run.app') ||
+      hostname.endsWith('.aistudio.google.com') ||
+      (envUrl && window.location.origin === envUrl)
+    ) {
+      return '';
+    }
+  }
+
+  return envUrl;
+}
+
+export const API_BASE_URL: string = getApiBaseUrl();
 
 /**
- * Safely constructs a full API URL by joining API_BASE_URL and the endpoint path,
+ * Safely constructs a full API URL by joining the effective API base URL and the endpoint path,
  * preventing duplicate or missing slashes.
  */
 export function apiUrl(endpoint: string): string {
-  if (!endpoint) return API_BASE_URL || '/';
+  if (!endpoint) return getApiBaseUrl() || '/';
 
   // If endpoint is already an absolute HTTP/HTTPS URL, return as-is
   if (/^https?:\/\//i.test(endpoint)) {
@@ -28,8 +49,43 @@ export function apiUrl(endpoint: string): string {
 
   // Ensure path starts with a single leading slash
   const cleanPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const base = getApiBaseUrl();
 
-  return API_BASE_URL ? `${API_BASE_URL}${cleanPath}` : cleanPath;
+  return base ? `${base}${cleanPath}` : cleanPath;
+}
+
+/**
+ * Helper to perform fetch with automatic relative fallback if external host is unreachable or returns 502/503.
+ */
+async function resilientFetch(endpoint: string, init?: RequestInit): Promise<Response> {
+  const targetUrl = apiUrl(endpoint);
+  const base = getApiBaseUrl();
+
+  try {
+    const res = await fetch(targetUrl, init);
+    // If remote service returns 502/503 (e.g. suspended backend) and we used a remote base, attempt relative fallback
+    if ((res.status === 502 || res.status === 503) && base && !endpoint.startsWith('http')) {
+      const cleanPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      try {
+        const localRes = await fetch(cleanPath, init);
+        if (localRes.ok) return localRes;
+      } catch {
+        // Return original response if fallback fails
+      }
+    }
+    return res;
+  } catch (err) {
+    // If network error (CORS failure, connection refused) and remote base was used, attempt relative fallback
+    if (base && !endpoint.startsWith('http')) {
+      const cleanPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      try {
+        return await fetch(cleanPath, init);
+      } catch {
+        // Throw original error if relative also fails
+      }
+    }
+    throw err;
+  }
 }
 
 /**
@@ -92,15 +148,20 @@ export async function fetchApps(params?: {
 
   const queryString = query.toString();
   const endpoint = queryString ? `/api/apps?${queryString}` : '/api/apps';
-  const res = await fetch(apiUrl(endpoint));
-  if (!res.ok) {
-    throw new Error(`Failed to fetch apps: ${res.statusText}`);
+  try {
+    const res = await resilientFetch(endpoint);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch apps: ${res.statusText}`);
+    }
+    return await res.json();
+  } catch (err) {
+    console.error('Failed to load apps:', err);
+    return [];
   }
-  return res.json();
 }
 
 export async function fetchAppById(id: string): Promise<AppListing> {
-  const res = await fetch(apiUrl(`/api/apps/${encodeURIComponent(id)}`));
+  const res = await resilientFetch(`/api/apps/${encodeURIComponent(id)}`);
   if (!res.ok) {
     throw new Error('Application not found');
   }
@@ -113,7 +174,7 @@ export async function triggerAppDownload(id: string): Promise<{
   downloadsCount: number;
   sha256?: string;
 }> {
-  const res = await fetch(apiUrl(`/api/apps/${encodeURIComponent(id)}/download`), {
+  const res = await resilientFetch(`/api/apps/${encodeURIComponent(id)}/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -141,11 +202,16 @@ export async function checkAdminStatus(): Promise<{
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(apiUrl('/api/admin/status'), { headers });
-  if (!res.ok) {
+  try {
+    const res = await resilientFetch('/api/admin/status', { headers });
+    if (!res.ok) {
+      return { isAuthenticated: false, hasConfiguredPassword: true };
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn('Admin status check note:', err);
     return { isAuthenticated: false, hasConfiguredPassword: true };
   }
-  return res.json();
 }
 
 export async function adminLogin(password: string): Promise<{
@@ -153,7 +219,7 @@ export async function adminLogin(password: string): Promise<{
   token: string;
   username: string;
 }> {
-  const res = await fetch(apiUrl('/api/admin/login'), {
+  const res = await resilientFetch('/api/admin/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
@@ -171,7 +237,7 @@ export async function adminSetup(password: string): Promise<{
   token: string;
   username: string;
 }> {
-  const res = await fetch(apiUrl('/api/admin/setup'), {
+  const res = await resilientFetch('/api/admin/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
@@ -186,17 +252,19 @@ export async function adminSetup(password: string): Promise<{
 
 export async function adminLogout(): Promise<void> {
   try {
-    await fetch(apiUrl('/api/admin/logout'), {
+    await resilientFetch('/api/admin/logout', {
       method: 'POST',
       headers: getAuthHeaders(),
     });
+  } catch {
+    // Ignore logout failure
   } finally {
     clearStoredAdminToken();
   }
 }
 
 export async function createAppListing(appData: Partial<AppListing>): Promise<AppListing> {
-  const res = await fetch(apiUrl('/api/apps'), {
+  const res = await resilientFetch('/api/apps', {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(appData),
@@ -212,7 +280,7 @@ export async function updateAppListing(
   id: string,
   appData: Partial<AppListing>
 ): Promise<AppListing> {
-  const res = await fetch(apiUrl(`/api/apps/${encodeURIComponent(id)}`), {
+  const res = await resilientFetch(`/api/apps/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify(appData),
@@ -225,7 +293,7 @@ export async function updateAppListing(
 }
 
 export async function deleteAppListing(id: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/apps/${encodeURIComponent(id)}`), {
+  const res = await resilientFetch(`/api/apps/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
@@ -415,7 +483,7 @@ async function uploadInChunks(
     }
 
     // Call /api/upload-complete to finalize and parse metadata
-    const completeRes = await fetch(apiUrl('/api/upload-complete'), {
+    const completeRes = await resilientFetch('/api/upload-complete', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -443,7 +511,7 @@ async function uploadInChunks(
     return completeJson as UploadResult;
   } catch (err: any) {
     // Notify server to clean up temp chunks
-    fetch(apiUrl('/api/upload-cancel'), {
+    resilientFetch('/api/upload-cancel', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -451,7 +519,6 @@ async function uploadInChunks(
       },
       body: JSON.stringify({ uploadId }),
     }).catch(() => {});
-
     throw err;
   }
 }
@@ -579,7 +646,7 @@ export async function submitContact(data: {
   subject: string;
   message: string;
 }): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(apiUrl('/api/contact'), {
+  const res = await resilientFetch('/api/contact', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -599,7 +666,7 @@ export async function fetchSystemStatus(): Promise<{
   hasCustomPassword: boolean;
   version: string;
 }> {
-  const res = await fetch(apiUrl('/api/system/status'));
+  const res = await resilientFetch('/api/system/status');
   if (!res.ok) {
     throw new Error('Failed to fetch system status');
   }
