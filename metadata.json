@@ -1,0 +1,6 @@
+{
+  "name": "WinterBuild - Android APK Hub",
+  "description": "A simple and safe website to discover and download free Android apps.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
