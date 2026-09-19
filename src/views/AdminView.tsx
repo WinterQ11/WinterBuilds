@@ -245,8 +245,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
     try {
       if (isSetupMode) {
-        if (passwordInput.length < 6) {
-          throw new Error('Password must be at least 6 characters long.');
+        if (passwordInput.length < 8) {
+          throw new Error('Password must be at least 8 characters long for security.');
         }
         if (passwordInput !== confirmPasswordInput) {
           throw new Error('Passwords do not match. Please try again.');

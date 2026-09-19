@@ -3,41 +3,36 @@ import { AppListing, AppCategory, UploadResult, ApkDetectedInfo } from './types'
 export type { UploadResult, ApkDetectedInfo };
 
 /**
- * Centralized API Base URL Configuration.
+ * Configurable API Base URL.
  * 
- * Intelligent routing:
- * 1. If running on same origin or in container/local environments (localhost, 127.0.0.1, *.run.app),
- *    always prefer relative paths ("") so the co-located Express backend is reached directly.
- * 2. If VITE_API_BASE_URL is explicitly set AND running on an external static domain (e.g. Cloudflare Pages),
- *    use the configured remote backend URL.
- * 3. Default to relative routes ("").
+ * - If VITE_API_BASE_URL is configured (e.g. in .env, .env.local, or hosting env variables),
+ *   it will be used as the base URL for all frontend API calls.
+ * - Sensible default for local development, Google AI Studio preview, and Vercel:
+ *   Defaults to relative paths (""), so all requests hit same-origin /api/* routes directly
+ *   without CORS issues or protocol mismatches.
  */
 export function getApiBaseUrl(): string {
   const envUrl = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '').trim().replace(/\/+$/, '');
   
-  if (typeof window !== 'undefined' && window.location) {
-    const hostname = window.location.hostname;
-    // When running inside local dev or Cloud Run / AI Studio container environment,
-    // the backend is co-located on port 3000. Always prefer relative API routes.
-    if (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname.endsWith('.run.app') ||
-      hostname.endsWith('.aistudio.google.com') ||
-      (envUrl && window.location.origin === envUrl)
-    ) {
-      return '';
+  if (envUrl) {
+    if (typeof window !== 'undefined' && window.location) {
+      // If configured URL matches the active origin, use relative paths for efficiency
+      if (window.location.origin === envUrl) {
+        return '';
+      }
     }
+    return envUrl;
   }
 
-  return envUrl;
+  // Sensible local development and co-located deployment default
+  return '';
 }
 
 export const API_BASE_URL: string = getApiBaseUrl();
 
 /**
- * Safely constructs a full API URL by joining the effective API base URL and the endpoint path,
- * preventing duplicate or missing slashes.
+ * Safely constructs an API URL by joining the API base URL and the endpoint path.
+ * Normalizes leading slashes and prevents duplicate "/api" prefixes if the base URL already ends with "/api".
  */
 export function apiUrl(endpoint: string): string {
   if (!endpoint) return getApiBaseUrl() || '/';
@@ -47,11 +42,21 @@ export function apiUrl(endpoint: string): string {
     return endpoint;
   }
 
-  // Ensure path starts with a single leading slash
-  const cleanPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  let cleanPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const base = getApiBaseUrl();
 
-  return base ? `${base}${cleanPath}` : cleanPath;
+  if (!base) {
+    return cleanPath;
+  }
+
+  // If base already ends with /api and cleanPath starts with /api/, avoid duplicate "/api/api/..."
+  if (base.endsWith('/api') && cleanPath.startsWith('/api/')) {
+    cleanPath = cleanPath.substring(4);
+  } else if (base.endsWith('/api') && cleanPath === '/api') {
+    cleanPath = '';
+  }
+
+  return `${base}${cleanPath}`;
 }
 
 /**
