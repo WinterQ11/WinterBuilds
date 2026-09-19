@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/serverApp.ts --bundle --platform=node --format=esm --packages=external --outfile=api/serverApp.js",
     "build:frontend": "vite build",
+    "build:serverless": "esbuild src/serverApp.ts --bundle --platform=node --format=esm --packages=external --outfile=api/serverApp.js",
+    "build:vercel": "vite build && esbuild src/serverApp.ts --bundle --platform=node --format=esm --packages=external --outfile=api/serverApp.js",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
