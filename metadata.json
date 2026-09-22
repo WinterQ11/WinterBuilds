@@ -1,0 +1,6 @@
+{
+  "name": "WinterBuilds",
+  "description": "Clean, modern Android APK download hub with administrator publishing and direct-to-storage uploads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
