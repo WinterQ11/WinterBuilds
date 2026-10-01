@@ -8,19 +8,26 @@ const API_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || '/api').replace(/\/+
  * Retrieves the current admin authentication token (from Supabase Auth or local storage).
  */
 export async function getAuthToken(): Promise<string | null> {
+  try {
+    const local = localStorage.getItem('winterbuilds_auth_token');
+    if (local) return local;
+  } catch {
+    // ignore
+  }
+
   const supabase = getSupabaseClient();
   if (supabase) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) {
-      return session.access_token;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        return session.access_token;
+      }
+    } catch {
+      // ignore
     }
   }
 
-  try {
-    return localStorage.getItem('winterbuilds_auth_token');
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**
@@ -89,11 +96,14 @@ async function safeFetch<T>(endpoint: string, options: RequestInit = {}): Promis
 
     // Handle specific status codes cleanly with actual server error message priority
     if (response.status === 401) {
-      setLocalAuthToken(null);
       if (isAuthEndpoint) {
         throw new Error(serverMessage || 'Invalid administrator password.');
       }
-      throw new Error(serverMessage || 'Your admin session has expired. Please sign in again.');
+      // Only clear token if checking status or if server explicitly returned session expired
+      if (endpoint.includes('/admin/status') || serverMessage?.toLowerCase().includes('expired')) {
+        setLocalAuthToken(null);
+      }
+      throw new Error(serverMessage || 'Authentication required. Please sign in again.');
     }
     if (response.status === 403) {
       throw new Error(serverMessage || "Access denied. You don't have permission to perform this action.");

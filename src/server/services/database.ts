@@ -1,18 +1,43 @@
 import fs from 'fs';
 import path from 'path';
-import { getServerSupabaseClient } from '../../lib/supabase';
-import { verifyAdminSessionToken } from './auth';
+import {
+  getServerSupabaseClient,
+  isDnsOrNetworkError,
+  markSupabaseHostUnreachable,
+} from '../../lib/supabase';
+import { verifyAdminSessionToken, verifyAdminPassword } from './auth';
 import type { Application, AppStatus, AppCategory, DashboardStats } from '../../types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const LOCAL_DB_PATH = path.join(DATA_DIR, 'applications.json');
+function getDataDir(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    const tmpDir = path.join('/tmp', 'winterbuilds_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
+  }
 
-// Ensure local persistence directory exists
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const localDir = path.join(process.cwd(), 'data');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    return localDir;
+  } catch {
+    const tmpDir = path.join('/tmp', 'winterbuilds_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
   }
 }
+
+function getLocalDbPath(): string {
+  return path.join(getDataDir(), 'applications.json');
+}
+
+// In-memory fallback
+let inMemoryApps: Application[] | null = null;
 
 // Pre-seeded high quality Android open-source applications for immediate rich experience
 const INITIAL_APPLICATIONS: Application[] = [
@@ -129,24 +154,43 @@ const INITIAL_APPLICATIONS: Application[] = [
 ];
 
 function readLocalApps(): Application[] {
-  ensureDataDir();
-  if (!fs.existsSync(LOCAL_DB_PATH)) {
-    fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(INITIAL_APPLICATIONS, null, 2));
+  if (inMemoryApps && inMemoryApps.length > 0) {
+    return [...inMemoryApps];
+  }
+
+  const dbPath = getLocalDbPath();
+  if (!fs.existsSync(dbPath)) {
+    try {
+      fs.writeFileSync(dbPath, JSON.stringify(INITIAL_APPLICATIONS, null, 2));
+    } catch {
+      // In-memory fallback
+    }
+    inMemoryApps = [...INITIAL_APPLICATIONS];
     return [...INITIAL_APPLICATIONS];
   }
   try {
-    const content = fs.readFileSync(LOCAL_DB_PATH, 'utf-8');
+    const content = fs.readFileSync(dbPath, 'utf-8');
     const apps = JSON.parse(content);
-    return Array.isArray(apps) ? apps : [...INITIAL_APPLICATIONS];
+    if (Array.isArray(apps) && apps.length > 0) {
+      inMemoryApps = apps;
+      return apps;
+    }
+    inMemoryApps = [...INITIAL_APPLICATIONS];
+    return [...INITIAL_APPLICATIONS];
   } catch (err) {
-    console.error('Error reading local applications database:', err);
+    inMemoryApps = [...INITIAL_APPLICATIONS];
     return [...INITIAL_APPLICATIONS];
   }
 }
 
 function writeLocalApps(apps: Application[]) {
-  ensureDataDir();
-  fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(apps, null, 2));
+  inMemoryApps = [...apps];
+  try {
+    const dbPath = getLocalDbPath();
+    fs.writeFileSync(dbPath, JSON.stringify(apps, null, 2));
+  } catch {
+    // In-memory fallback maintained
+  }
 }
 
 export interface ListAppsOptions {
@@ -209,8 +253,11 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
     try {
       const { data, error, count } = await query;
       if (error) {
-        console.error('Supabase listApplications error:', error);
-        // Fall back gracefully to local persistence instead of crashing with 500
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase listApplications error:', error);
+        }
         return getFallbackLocalApplications(options);
       }
 
@@ -219,7 +266,11 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
         total: count !== null ? count : (data?.length || 0),
       };
     } catch (err: any) {
-      console.error('Unexpected error executing Supabase listApplications:', err);
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        console.error('Unexpected error executing Supabase listApplications:', err);
+      }
       return getFallbackLocalApplications(options);
     }
   }
@@ -298,12 +349,20 @@ export async function getApplicationBySlug(slug: string): Promise<Application | 
         .maybeSingle();
 
       if (error) {
-        console.error('Supabase getApplicationBySlug error:', error);
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase getApplicationBySlug error:', error);
+        }
       } else if (data) {
         return data as Application;
       }
-    } catch (err) {
-      console.error('getApplicationBySlug unexpected error:', err);
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        console.error('getApplicationBySlug unexpected error:', err);
+      }
     }
   }
 
@@ -322,12 +381,20 @@ export async function getApplicationById(id: string): Promise<Application | null
         .maybeSingle();
 
       if (error) {
-        console.error('Supabase getApplicationById error:', error);
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase getApplicationById error:', error);
+        }
       } else if (data) {
         return data as Application;
       }
-    } catch (err) {
-      console.error('getApplicationById unexpected error:', err);
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        console.error('getApplicationById unexpected error:', err);
+      }
     }
   }
 
@@ -348,17 +415,30 @@ export async function createApplication(appData: Omit<Application, 'id' | 'creat
 
   const supabase = getServerSupabaseClient();
   if (supabase) {
-    const { data, error } = await supabase
-      .from('applications')
-      .insert([newApp])
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .insert([newApp])
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Supabase createApplication error:', error);
-      throw new Error(`Failed to save application: ${error.message}`);
+      if (error) {
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase createApplication error:', error);
+          throw new Error(`Failed to save application: ${error.message}`);
+        }
+      } else if (data) {
+        return data as Application;
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        throw err;
+      }
     }
-    return data as Application;
   }
 
   const apps = readLocalApps();
@@ -380,18 +460,31 @@ export async function updateApplication(id: string, updates: Partial<Application
 
   const supabase = getServerSupabaseClient();
   if (supabase) {
-    const { data, error } = await supabase
-      .from('applications')
-      .update(sanitizedUpdates)
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .update(sanitizedUpdates)
+        .eq('id', id)
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Supabase updateApplication error:', error);
-      throw new Error(`Failed to update application: ${error.message}`);
+      if (error) {
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase updateApplication error:', error);
+          throw new Error(`Failed to update application: ${error.message}`);
+        }
+      } else if (data) {
+        return data as Application;
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        throw err;
+      }
     }
-    return data as Application;
   }
 
   const apps = readLocalApps();
@@ -411,18 +504,31 @@ export async function updateApplication(id: string, updates: Partial<Application
 export async function deleteApplication(id: string): Promise<Application> {
   const supabase = getServerSupabaseClient();
   if (supabase) {
-    const { data, error } = await supabase
-      .from('applications')
-      .delete()
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .delete()
+        .eq('id', id)
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Supabase deleteApplication error:', error);
-      throw new Error(`Failed to delete application: ${error.message}`);
+      if (error) {
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+        } else {
+          console.error('Supabase deleteApplication error:', error);
+          throw new Error(`Failed to delete application: ${error.message}`);
+        }
+      } else if (data) {
+        return data as Application;
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err.message);
+      } else {
+        throw err;
+      }
     }
-    return data as Application;
   }
 
   const apps = readLocalApps();
@@ -511,7 +617,12 @@ export async function verifyAdminAuthorization(authHeader?: string): Promise<{
     }
   }
 
-  // 2. Fallback token check for dev/admin initial access:
+  // 2. Direct admin password authentication support
+  if (verifyAdminPassword(token)) {
+    return { authorized: true, email: 'winterbuilds99@gmail.com', userId: 'admin-direct-auth' };
+  }
+
+  // 3. Fallback token check for dev/admin initial access:
   // If user passes a valid admin session secret token or simulated auth in local mode
   const adminSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.ADMIN_SECRET || 'winterbuilds_admin_access';
   if (token === adminSecret || token.startsWith('admin_preview_token_') || token.startsWith('admin_')) {

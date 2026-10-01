@@ -103,22 +103,22 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
       } else {
+        let errMessage = '';
+        try {
+          const parsed = JSON.parse(xhr.responseText);
+          errMessage = parsed.error?.message || parsed.message || '';
+        } catch {
+          // keep empty
+        }
+
         if (xhr.status === 401) {
-          reject(new Error('Your admin session has expired. Please sign in again.'));
+          reject(new Error(errMessage || 'Authentication required to store APK file. Please sign in again.'));
         } else if (xhr.status === 403) {
-          reject(new Error("You don't have permission to upload this app."));
+          reject(new Error(errMessage || "You don't have permission to upload this app."));
         } else if (xhr.status === 413) {
-          reject(new Error('Your hosting/storage provider rejected this request size.'));
+          reject(new Error('Storage provider rejected this request size.'));
         } else {
-          let errText = xhr.statusText;
-          try {
-            const parsed = JSON.parse(xhr.responseText);
-            if (parsed.error?.message) errText = parsed.error.message;
-            if (parsed.message) errText = parsed.message;
-          } catch {
-            // keep statusText
-          }
-          reject(new Error(errText || `Storage rejected upload with status ${xhr.status}`));
+          reject(new Error(errMessage || xhr.statusText || `Storage rejected upload with status ${xhr.status}`));
         }
       }
     };
@@ -134,11 +134,24 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
     xhr.open(auth.method, auth.uploadUrl, true);
 
     // Apply custom headers if provider specifies (e.g. Supabase signed upload token or Content-Type)
+    let hasContentType = false;
+    let hasAuth = false;
     if (auth.headers) {
       for (const [key, val] of Object.entries(auth.headers)) {
         xhr.setRequestHeader(key, val);
+        if (key.toLowerCase() === 'content-type') hasContentType = true;
+        if (key.toLowerCase() === 'authorization') hasAuth = true;
       }
-    } else {
+    }
+
+    if (!hasAuth) {
+      const token = auth.token;
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+    }
+
+    if (!hasContentType) {
       xhr.setRequestHeader('Content-Type', file.type || 'application/vnd.android.package-archive');
     }
 

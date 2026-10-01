@@ -24,11 +24,6 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onLoginSuccess, 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Clear any stale local auth tokens when navigating to login
-    setLocalAuthToken(null);
-  }, []);
-
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password) {

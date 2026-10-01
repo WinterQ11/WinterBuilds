@@ -364,6 +364,29 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
               </div>
             </div>
 
+            {/* Optional external APK URL input */}
+            <div className="rounded-2xl p-4 border bg-[#faf6ee]/70 border-[#e3d7c3] dark:bg-[#1a1815]/70 dark:border-[#2b2721] space-y-2">
+              <span className="text-xs font-semibold text-[#544739] dark:text-[#c4b7a6] block">
+                Or supply an external APK download URL directly:
+              </span>
+              <input
+                type="url"
+                placeholder="https://github.com/.../releases/download/.../app.apk (or CDN / direct link)"
+                value={apkDownloadUrl}
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  setApkDownloadUrl(val);
+                  if (val && !apkStoragePath) {
+                    setApkStoragePath(`external:${slug || name || 'app'}`);
+                  }
+                }}
+                className="w-full px-3.5 py-2 rounded-xl border text-xs font-mono bg-[#ffffff] border-[#d8ccb8] text-[#1f1914] dark:bg-[#141210] dark:border-[#332e27] dark:text-[#f8f5ee]"
+              />
+              <p className="text-[11px] text-[#786c5e] dark:text-[#887c6e]">
+                Useful for large APK files or apps already distributed via GitHub Releases, F-Droid, or external CDNs.
+              </p>
+            </div>
+
             {/* Upload Progress Display */}
             {uploadProgress && (
               <div className="rounded-2xl p-5 border space-y-3 bg-[#f5efe3] border-[#e0d5c0] dark:bg-[#1a1815] dark:border-[#2a2620]">
@@ -624,6 +647,23 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
               </div>
             </div>
 
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-[#3b3127] dark:text-[#c4b7a6]">
+                APK Download Link / URL *
+              </label>
+              <input
+                type="text"
+                required
+                value={apkDownloadUrl}
+                onChange={(e) => setApkDownloadUrl(e.target.value)}
+                placeholder="https://... or /api/downloads/..."
+                className="w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono bg-[#faf6ee] border-[#ded4c3] text-[#1f1914] dark:bg-[#1a1815] dark:border-[#2b2721] dark:text-[#f8f5ee]"
+              />
+              <p className="mt-1 text-[11px] text-[#716556] dark:text-[#918576]">
+                Direct download URL for the application package file.
+              </p>
+            </div>
+
             <div className="flex items-center gap-3 pt-2">
               <input
                 id="wizard-featured-checkbox"
@@ -738,16 +778,16 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (step === 1 && !apkStoragePath) {
-                setUploadError('Please select and upload an APK file before proceeding.');
+              if (step === 1 && !apkStoragePath && !apkDownloadUrl) {
+                setUploadError('Please select and upload an APK file or provide an APK download link before proceeding.');
                 return;
               }
               setUploadError(null);
               setStep(step + 1);
             }}
-            disabled={step === 1 && !apkStoragePath}
+            disabled={step === 1 && !apkStoragePath && !apkDownloadUrl}
             className={`inline-flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all ${
-              step === 1 && !apkStoragePath
+              step === 1 && !apkStoragePath && !apkDownloadUrl
                 ? 'opacity-50 cursor-not-allowed bg-[#ddd1be] text-[#716454] dark:bg-[#25221d] dark:text-[#6a6053]'
                 : 'bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-neutral-950'
             }`}

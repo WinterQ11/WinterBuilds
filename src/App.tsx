@@ -111,6 +111,13 @@ export default function App() {
   // Render current view
   const renderView = () => {
     if (currentPath === '/admin') {
+      if (!authChecked) {
+        return (
+          <div className="min-h-[50vh] flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full border-2 border-amber-600 border-t-transparent animate-spin" />
+          </div>
+        );
+      }
       if (!isAdmin) {
         return (
           <AdminLoginPage
@@ -124,7 +131,10 @@ export default function App() {
       }
       return (
         <AdminDashboardPage
-          onExitAdmin={() => navigate('/')}
+          onExitAdmin={() => {
+            setIsAdmin(false);
+            navigate('/');
+          }}
           onViewPublicApp={handleSelectApp}
         />
       );

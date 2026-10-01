@@ -17,6 +17,7 @@ import {
   generateApkDownloadFileName,
   formatCleanDownloadUrl,
   saveApkStorageMetadata,
+  getStorageDir,
 } from './services/storage';
 import {
   isAdminPasswordConfigured,
@@ -25,7 +26,7 @@ import {
   isAllowedAdminEmail,
 } from './services/auth';
 import { generateAppEnhancements } from '../lib/gemini';
-import { isSupabaseConfigured, getServerSupabaseClient } from '../lib/supabase';
+import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient } from '../lib/supabase';
 import path from 'path';
 import fs from 'fs';
 
@@ -65,7 +66,8 @@ function sendSuccess(res: Response, data: any, status: number = 200) {
 
 // Authentication middleware for admin routes
 async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  const authHeader = req.headers.authorization || (queryToken ? `Bearer ${queryToken}` : undefined);
   const result = await verifyAdminAuthorization(authHeader);
 
   if (!result.authorized) {
@@ -88,7 +90,8 @@ app.get('/api/health', (req, res) => {
   sendSuccess(res, {
     status: 'healthy',
     product: 'WinterBuilds',
-    supabaseConnected: isSupabaseConfigured(),
+    supabaseConnected: isSupabaseConnected(),
+    storageProvider: isSupabaseConnected() ? 'supabase' : 'local-resilient',
     timestamp: new Date().toISOString(),
   });
 });
@@ -185,7 +188,7 @@ app.get('/api/admin/status', async (req, res) => {
     authenticated: result.authorized,
     email: result.email || null,
     passwordConfigured,
-    supabaseConfigured: isSupabaseConfigured(),
+    supabaseConfigured: isSupabaseConnected(),
     defaultAdminEmail: 'winterbuilds99@gmail.com',
   });
 });
@@ -434,7 +437,7 @@ app.post('/api/upload/direct', requireAdmin, express.raw({ type: '*/*', limit: '
       return sendError(res, 400, 'BAD_REQUEST', 'Missing storage path parameter.');
     }
 
-    const localDir = path.join(process.cwd(), 'data', 'storage');
+    const localDir = getStorageDir();
     const fullPath = path.join(localDir, storagePath);
     const parentDir = path.dirname(fullPath);
 
@@ -467,10 +470,17 @@ app.post('/api/upload/direct', requireAdmin, express.raw({ type: '*/*', limit: '
 app.get('/api/downloads/:path', (req, res) => {
   try {
     const storagePath = decodeURIComponent(req.params.path);
-    const fullPath = path.join(process.cwd(), 'data', 'storage', storagePath);
+    const localDir = getStorageDir();
+    let fullPath = path.join(localDir, storagePath);
 
     if (!fs.existsSync(fullPath)) {
-      return res.status(404).send('APK file not found on storage.');
+      // Also check fallback cwd data/storage
+      const fallbackPath = path.join(process.cwd(), 'data', 'storage', storagePath);
+      if (fs.existsSync(fallbackPath)) {
+        fullPath = fallbackPath;
+      } else {
+        return res.status(404).send('APK file not found on storage.');
+      }
     }
 
     const requestedName = (req.query.filename as string) || (req.query.name as string);

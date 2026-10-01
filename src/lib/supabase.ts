@@ -59,6 +59,49 @@ const SUPABASE_ANON_KEY = normalizeSupabaseKey(rawAnonKey);
 let browserClient: SupabaseClient | null = null;
 let serverClient: SupabaseClient | null = null;
 
+// Circuit-breaker for unreachable or invalid Supabase project hosts
+let supabaseHostReachable: boolean = true;
+let lastReachabilityCheck: number = 0;
+const RETRY_INTERVAL_MS = 60000; // Retry once per minute if unreachable
+
+/**
+ * Determines whether an error is caused by DNS resolution failure, network timeout,
+ * or host unreachability (e.g. paused/deleted/invalid Supabase project).
+ */
+export function isDnsOrNetworkError(err: any): boolean {
+  if (!err) return false;
+  const msg = typeof err === 'string'
+    ? err
+    : `${err.message || ''} ${err.details || ''} ${err.code || ''} ${JSON.stringify(err)}`;
+  return (
+    msg.includes('ENOTFOUND') ||
+    msg.includes('getaddrinfo') ||
+    msg.includes('fetch failed') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('UND_ERR_CONNECT_TIMEOUT')
+  );
+}
+
+/**
+ * Marks the Supabase host as unreachable so subsequent operations fail fast
+ * and use resilient local storage without spamming the console.
+ */
+export function markSupabaseHostUnreachable(errorReason?: string): void {
+  if (supabaseHostReachable) {
+    supabaseHostReachable = false;
+    lastReachabilityCheck = Date.now();
+    console.warn(`[WinterBuilds Storage] Supabase host is currently unreachable (${errorReason || 'network/DNS error'}). Falling back to resilient local storage mode.`);
+  }
+}
+
+/**
+ * Marks the Supabase host as reachable again.
+ */
+export function markSupabaseHostReachable(): void {
+  supabaseHostReachable = true;
+}
+
 /**
  * Returns true if public Supabase credentials are provided and valid.
  */
@@ -67,13 +110,18 @@ export function isSupabaseConfigured(): boolean {
 }
 
 /**
- * Returns the client-side Supabase client (used for Supabase Auth and public queries).
- * Lazy-initialized to prevent runtime crashes when credentials are not yet configured.
- * Receives the project base URL directly so Supabase Auth targets /auth/v1/token
- * and database queries automatically target /rest/v1/...
+ * Returns true if Supabase host is currently operational.
+ */
+export function isSupabaseConnected(): boolean {
+  return isSupabaseConfigured() && supabaseHostReachable;
+}
+
+/**
+ * Returns the client-side Supabase client.
+ * Returns null if Supabase is not configured or marked unreachable.
  */
 export function getSupabaseClient(): SupabaseClient | null {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseConfigured() || !supabaseHostReachable) {
     return null;
   }
 
@@ -86,8 +134,7 @@ export function getSupabaseClient(): SupabaseClient | null {
           detectSessionInUrl: true,
         },
       });
-    } catch (err) {
-      console.error('Failed to initialize browser Supabase client:', err);
+    } catch {
       return null;
     }
   }
@@ -98,13 +145,23 @@ export function getSupabaseClient(): SupabaseClient | null {
 /**
  * Server-side Supabase client using the SERVICE ROLE secret key.
  * Only callable in server environments (Express, Vercel Serverless).
+ * Returns null if Supabase is not configured or host is unreachable.
  */
 export function getServerSupabaseClient(): SupabaseClient | null {
   const serviceKey = normalizeSupabaseKey(process.env.SUPABASE_SERVICE_ROLE_KEY);
   const projectUrl = normalizeSupabaseUrl(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL);
 
-  if (!projectUrl || !serviceKey) {
+  if (!projectUrl || !serviceKey || projectUrl.includes('your-project-ref')) {
     return null;
+  }
+
+  // Fast-fail if host was previously marked unreachable and retry interval hasn't elapsed
+  if (!supabaseHostReachable) {
+    if (Date.now() - lastReachabilityCheck < RETRY_INTERVAL_MS) {
+      return null;
+    }
+    // Allow trying once after interval
+    supabaseHostReachable = true;
   }
 
   if (!serverClient) {
@@ -115,8 +172,7 @@ export function getServerSupabaseClient(): SupabaseClient | null {
           autoRefreshToken: false,
         },
       });
-    } catch (err) {
-      console.error('Failed to initialize server Supabase client:', err);
+    } catch {
       return null;
     }
   }
@@ -124,3 +180,24 @@ export function getServerSupabaseClient(): SupabaseClient | null {
   return serverClient;
 }
 
+// Initial asynchronous DNS health check in Node.js environments
+if (typeof process !== 'undefined' && process.versions?.node) {
+  try {
+    const rawCheckUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL;
+    const url = normalizeSupabaseUrl(rawCheckUrl);
+    if (url && !url.includes('your-project-ref')) {
+      const hostname = new URL(url).hostname;
+      import('dns').then((dns) => {
+        dns.lookup(hostname, (err) => {
+          if (err) {
+            markSupabaseHostUnreachable(`DNS resolution: ${err.code || err.message}`);
+          } else {
+            markSupabaseHostReachable();
+          }
+        });
+      }).catch(() => {});
+    }
+  } catch {
+    // Ignore URL parse errors on initial check
+  }
+}
