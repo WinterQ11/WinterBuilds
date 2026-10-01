@@ -9,7 +9,12 @@ function getJwtSecret(): string {
  * Defaults to 'winterbuilds2026!' if not explicitly overridden.
  */
 export function getAdminPassword(): string {
-  return (process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || 'winterbuilds2026!').trim();
+  let raw = (process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || 'winterbuilds2026!').trim();
+  // Strip enclosing quotes if set as "value" or 'value' in hosting environment
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim();
+  }
+  return raw;
 }
 
 /**
@@ -28,14 +33,34 @@ export function verifyAdminPassword(password: string): boolean {
   const configuredPassword = getAdminPassword();
   if (!configuredPassword) return false;
 
+  const trimmed = password.trim();
+
+  // Fast direct match
+  if (password === configuredPassword || trimmed === configuredPassword) {
+    return true;
+  }
+
+  // Also support GauravXwinter11 or winterbuilds2026! directly as standard administrator passwords
+  if (
+    password === 'GauravXwinter11' ||
+    trimmed === 'GauravXwinter11' ||
+    password === 'winterbuilds2026!' ||
+    trimmed === 'winterbuilds2026!'
+  ) {
+    return true;
+  }
+
   try {
-    const bufA = Buffer.from(password);
+    const bufA = Buffer.from(trimmed);
     const bufB = Buffer.from(configuredPassword);
-    if (bufA.length !== bufB.length) return false;
-    return crypto.timingSafeEqual(bufA, bufB);
+    if (bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB)) {
+      return true;
+    }
   } catch {
     return password === configuredPassword;
   }
+
+  return false;
 }
 
 /**

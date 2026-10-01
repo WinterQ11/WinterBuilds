@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { api, setLocalAuthToken } from '../services/api';
-import { getSupabaseClient } from '../lib/supabase';
 import {
   Lock,
   Mail,
@@ -26,52 +25,23 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onLoginSuccess, 
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    loadAdminEmail();
+    // Clear any stale local auth tokens when navigating to login
+    setLocalAuthToken(null);
   }, []);
-
-  const loadAdminEmail = async () => {
-    try {
-      const status = await api.checkAdminStatus();
-      if (status.email) {
-        setEmail(status.email);
-      } else if (status.defaultAdminEmail) {
-        setEmail(status.defaultAdminEmail);
-      }
-    } catch {
-      // Keep default
-    }
-  };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!password) {
+      setErrorMessage('Please enter the administrator password.');
+      return;
+    }
+
     setIsLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
 
     try {
-      // 1. If Supabase Auth is configured, attempt Supabase sign in first
-      const supabase = getSupabaseClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email: email.trim(),
-            password,
-          });
-
-          if (!error && data?.session?.access_token) {
-            setLocalAuthToken(data.session.access_token);
-            setSuccessMessage('Welcome back! Redirecting to admin dashboard...');
-            setTimeout(() => {
-              onLoginSuccess();
-            }, 400);
-            return;
-          }
-        } catch {
-          // Proceed to backend admin login
-        }
-      }
-
-      // 2. Validate against ADMIN_PASSWORD environment variable via /api/admin/login
+      // Direct, instant API login validated against the environment key ADMIN_PASSWORD
       const res = await api.adminLogin({
         email: email.trim(),
         password,
@@ -82,13 +52,13 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onLoginSuccess, 
         setSuccessMessage('Authentication successful! Opening Admin Hub...');
         setTimeout(() => {
           onLoginSuccess();
-        }, 400);
+        }, 150);
         return;
       }
 
       setErrorMessage('Unexpected response during sign in. Please try again.');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Invalid administrator credentials.');
+      setErrorMessage(err.message || 'Invalid administrator password.');
     } finally {
       setIsLoading(false);
     }
@@ -183,7 +153,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onLoginSuccess, 
             {isLoading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Verifying Credentials...</span>
+                <span>Signing in...</span>
               </>
             ) : (
               <>

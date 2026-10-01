@@ -34,8 +34,12 @@ export default function App() {
   const checkAdmin = async () => {
     const token = await getAuthToken();
     if (token) {
-      const res = await api.checkAdminStatus();
-      setIsAdmin(res.authenticated);
+      try {
+        const res = await api.checkAdminStatus();
+        setIsAdmin(Boolean(res?.authenticated));
+      } catch {
+        setIsAdmin(false);
+      }
     } else {
       setIsAdmin(false);
     }
@@ -60,16 +64,21 @@ export default function App() {
     };
   }, []);
 
-  // Handle URL changes
+  // Handle URL changes cleanly
   const navigate = (path: string) => {
     setCurrentPath(path);
-    // Push both browser history and hash for seamless compatibility in iframes and static servers
+    const inIframe = typeof window !== 'undefined' && window.self !== window.top;
     try {
       window.history.pushState(null, '', path);
+      if (!inIframe && window.location.hash) {
+        window.history.replaceState(null, '', path);
+      }
     } catch {
-      // ignore
+      window.location.hash = `#${path}`;
     }
-    window.location.hash = `#${path}`;
+    if (inIframe) {
+      window.location.hash = `#${path}`;
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 

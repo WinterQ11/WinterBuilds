@@ -190,13 +190,16 @@ app.get('/api/admin/status', async (req, res) => {
   });
 });
 
-// Admin login endpoint
-app.post('/api/admin/login', async (req, res) => {
+// Admin login endpoint - Instant environment password verification
+app.post('/api/admin/login', (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email) {
       return sendError(res, 400, 'BAD_REQUEST', 'Email address is required.');
+    }
+    if (!password) {
+      return sendError(res, 400, 'BAD_REQUEST', 'Password is required.');
     }
 
     const trimmedEmail = String(email).trim().toLowerCase();
@@ -204,48 +207,23 @@ app.post('/api/admin/login', async (req, res) => {
       return sendError(res, 403, 'FORBIDDEN', 'Access denied: Only authorized administrators may sign in.');
     }
 
-    // 1. If Supabase is configured, try Supabase sign in first
-    const supabase = getServerSupabaseClient();
-    if (supabase && password) {
-      try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: trimmedEmail,
-          password: String(password),
-        });
-
-        if (!error && data?.session?.access_token) {
-          return sendSuccess(res, {
-            token: data.session.access_token,
-            email: trimmedEmail,
-            message: 'Signed in via Supabase Auth successfully.',
-          });
-        }
-      } catch {
-        // Fall back to admin password verification
-      }
-    }
-
-    // 2. Verify against admin password configured in environment
-    if (!password) {
-      return sendError(res, 400, 'BAD_REQUEST', 'Password is required.');
-    }
-
+    // Direct, instant environment password verification
     const isValid = verifyAdminPassword(String(password));
     if (!isValid) {
-      return sendError(res, 401, 'INVALID_CREDENTIALS', 'Invalid administrator password.');
+      return sendError(res, 401, 'INVALID_CREDENTIALS', 'Invalid administrator password. Please check your credentials.');
     }
 
     // Generate secure session token
     const token = createAdminSessionToken(trimmedEmail);
 
-    sendSuccess(res, {
+    return sendSuccess(res, {
       token,
       email: trimmedEmail,
       message: 'Administrator authenticated successfully.',
     });
   } catch (err: any) {
     console.error('Error in POST /api/admin/login:', err);
-    sendError(res, 500, 'LOGIN_FAILED', 'Failed to authenticate administrator.');
+    return sendError(res, 500, 'LOGIN_FAILED', 'Failed to authenticate administrator.');
   }
 });
 

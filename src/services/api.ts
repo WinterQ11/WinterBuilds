@@ -43,11 +43,14 @@ export function setLocalAuthToken(token: string | null) {
  */
 async function safeFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
-  const token = await getAuthToken();
+  const isAuthEndpoint = endpoint.includes('/admin/login');
 
   const headers = new Headers(options.headers || {});
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
+  if (!isAuthEndpoint) {
+    const token = await getAuthToken();
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
   }
   if (!headers.has('Content-Type') && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
     headers.set('Content-Type', 'application/json');
@@ -60,36 +63,18 @@ async function safeFetch<T>(endpoint: string, options: RequestInit = {}): Promis
       headers,
     });
   } catch (networkErr: any) {
-    throw new Error('Could not connect to the upload service. Check your connection.');
+    throw new Error('Could not connect to the service. Check your connection.');
   }
 
-  // Handle specific status codes cleanly
-  if (response.status === 401) {
-    setLocalAuthToken(null);
-    throw new Error('Your admin session has expired. Please sign in again.');
-  }
-  if (response.status === 403) {
-    throw new Error("You don't have permission to perform this action.");
-  }
-  if (response.status === 404) {
-    throw new Error('The requested resource or upload service is unavailable.');
-  }
-  if (response.status === 413) {
-    throw new Error('Your hosting/storage provider rejected this request size.');
-  }
-  if (response.status === 429) {
-    throw new Error('Too many requests. Please wait and try again.');
-  }
-
-  // Check content type before parsing JSON
+  // Parse JSON response data
   const contentType = response.headers.get('content-type') || '';
-  let responseData: any;
+  let responseData: any = null;
 
   if (contentType.includes('application/json')) {
     try {
       responseData = await response.json();
     } catch {
-      throw new Error('Server returned an invalid JSON response.');
+      responseData = null;
     }
   } else {
     const text = await response.text();
@@ -100,8 +85,30 @@ async function safeFetch<T>(endpoint: string, options: RequestInit = {}): Promis
   }
 
   if (!response.ok) {
-    const message = responseData?.error?.message || `Request failed with status ${response.status}`;
-    throw new Error(message);
+    const serverMessage = responseData?.error?.message;
+
+    // Handle specific status codes cleanly with actual server error message priority
+    if (response.status === 401) {
+      setLocalAuthToken(null);
+      if (isAuthEndpoint) {
+        throw new Error(serverMessage || 'Invalid administrator password.');
+      }
+      throw new Error(serverMessage || 'Your admin session has expired. Please sign in again.');
+    }
+    if (response.status === 403) {
+      throw new Error(serverMessage || "Access denied. You don't have permission to perform this action.");
+    }
+    if (response.status === 404) {
+      throw new Error(serverMessage || 'The requested resource or service is unavailable.');
+    }
+    if (response.status === 413) {
+      throw new Error('Request size exceeds the allowed limit.');
+    }
+    if (response.status === 429) {
+      throw new Error('Too many requests. Please wait a moment and try again.');
+    }
+
+    throw new Error(serverMessage || `Request failed with status ${response.status}`);
   }
 
   return responseData?.data !== undefined ? responseData.data : responseData;
