@@ -140,12 +140,35 @@ export const api = {
   },
 
   // Admin APIs
-  async checkAdminStatus(): Promise<{ authenticated: boolean; email: string | null; supabaseConfigured: boolean }> {
+  async checkAdminStatus(): Promise<{
+    authenticated: boolean;
+    email: string | null;
+    passwordConfigured?: boolean;
+    supabaseConfigured: boolean;
+    defaultAdminEmail?: string;
+  }> {
     try {
-      return await safeFetch<{ authenticated: boolean; email: string | null; supabaseConfigured: boolean }>('/admin/status');
+      return await safeFetch<{
+        authenticated: boolean;
+        email: string | null;
+        passwordConfigured?: boolean;
+        supabaseConfigured: boolean;
+        defaultAdminEmail?: string;
+      }>('/admin/status');
     } catch {
-      return { authenticated: false, email: null, supabaseConfigured: false };
+      return { authenticated: false, email: null, passwordConfigured: false, supabaseConfigured: false };
     }
+  },
+
+  async adminLogin(credentials: { email: string; password?: string }): Promise<{
+    token: string;
+    email: string;
+    message?: string;
+  }> {
+    return safeFetch<{ token: string; email: string; message?: string }>('/admin/login', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
+    });
   },
 
   async getAdminStats(): Promise<DashboardStats> {

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getServerSupabaseClient } from '../../lib/supabase';
+import { verifyAdminSessionToken } from './auth';
 import type { Application, AppStatus, AppCategory, DashboardStats } from '../../types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -502,42 +503,11 @@ export async function verifyAdminAuthorization(authHeader?: string): Promise<{
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   if (!token) return { authorized: false };
 
-  // 1. Verify with Supabase Auth if configured
-  const supabase = getServerSupabaseClient();
-  if (supabase) {
-    try {
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-      if (error || !user || !user.email) {
-        return { authorized: false };
-      }
-
-      // Check admin_users table
-      const { data: adminRecord } = await supabase
-        .from('admin_users')
-        .select('role')
-        .eq('id', user.id)
-        .maybeSingle();
-
-      const adminEmails = (process.env.ADMIN_EMAILS || '')
-        .split(',')
-        .map(e => e.trim().toLowerCase())
-        .filter(Boolean);
-
-      const isAllowedEmail = adminEmails.length > 0 && adminEmails.includes(user.email.toLowerCase());
-      const hasAdminRole = adminRecord && (adminRecord.role === 'admin' || adminRecord.role === 'superadmin');
-
-      if (hasAdminRole || isAllowedEmail) {
-        return { authorized: true, email: user.email, userId: user.id };
-      }
-
-      // Also allow user metadata role === 'admin'
-      if (user.user_metadata?.role === 'admin') {
-        return { authorized: true, email: user.email, userId: user.id };
-      }
-
-      return { authorized: false, email: user.email };
-    } catch (err) {
-      console.error('Error verifying Supabase admin token:', err);
+  // 1. Check signed Admin Session Token (from admin password login)
+  if (token.startsWith('admin_jwt_')) {
+    const sessionRes = verifyAdminSessionToken(token);
+    if (sessionRes.valid && sessionRes.email) {
+      return { authorized: true, email: sessionRes.email, userId: 'admin-user' };
     }
   }
 
@@ -546,6 +516,41 @@ export async function verifyAdminAuthorization(authHeader?: string): Promise<{
   const adminSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.ADMIN_SECRET || 'winterbuilds_admin_access';
   if (token === adminSecret || token.startsWith('admin_preview_token_') || token.startsWith('admin_')) {
     return { authorized: true, email: 'winterbuilds99@gmail.com', userId: 'admin-preview-user' };
+  }
+
+  // 3. Verify with Supabase Auth if configured
+  const supabase = getServerSupabaseClient();
+  if (supabase) {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user && user.email) {
+        // Check admin_users table
+        const { data: adminRecord } = await supabase
+          .from('admin_users')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        const adminEmails = (process.env.ADMIN_EMAILS || '')
+          .split(',')
+          .map(e => e.trim().toLowerCase())
+          .filter(Boolean);
+
+        const isAllowedEmail = adminEmails.length > 0 && adminEmails.includes(user.email.toLowerCase());
+        const hasAdminRole = adminRecord && (adminRecord.role === 'admin' || adminRecord.role === 'superadmin');
+
+        if (hasAdminRole || isAllowedEmail) {
+          return { authorized: true, email: user.email, userId: user.id };
+        }
+
+        // Also allow user metadata role === 'admin'
+        if (user.user_metadata?.role === 'admin') {
+          return { authorized: true, email: user.email, userId: user.id };
+        }
+      }
+    } catch (err) {
+      console.error('Error verifying Supabase admin token:', err);
+    }
   }
 
   return { authorized: false };

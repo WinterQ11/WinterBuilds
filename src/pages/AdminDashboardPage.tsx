@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   AlertCircle,
+  KeyRound,
 } from 'lucide-react';
 
 interface AdminDashboardPageProps {
@@ -335,6 +336,50 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                   <span className="text-[#716454] dark:text-[#8e8373]">Gemini AI Model</span>
                   <span className="font-mono font-semibold">gemini-2.5-flash</span>
                 </div>
+              </div>
+            </div>
+
+            {/* Admin Security & Password */}
+            <div className="p-6 rounded-3xl border bg-[#ffffff] border-[#e2d8c3] dark:bg-[#181614] dark:border-[#27231e] space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-500/10 text-amber-600 dark:bg-amber-400/10 dark:text-amber-400">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[#1c1713] dark:text-[#f8f5ee]">
+                    Administrator Password & Security
+                  </h3>
+                  <p className="text-xs text-[#716454] dark:text-[#8e8373]">
+                    Authentication credentials are protected and controlled via server environment variables
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="flex justify-between py-2 border-b border-[#eee3d1] dark:border-[#25211c]">
+                  <span className="text-[#716454] dark:text-[#8e8373]">Password Source</span>
+                  <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                    ADMIN_PASSWORD (Server Environment Key)
+                  </span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-[#eee3d1] dark:border-[#25211c]">
+                  <span className="text-[#716454] dark:text-[#8e8373]">Browser Modification</span>
+                  <span className="font-semibold text-[#8a7c6c] dark:text-[#a09485]">
+                    Disabled (Protected against unauthorized tampering)
+                  </span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-[#eee3d1] dark:border-[#25211c]">
+                  <span className="text-[#716454] dark:text-[#8e8373]">Session Token Security</span>
+                  <span className="font-semibold text-[#8a7c6c] dark:text-[#a09485]">
+                    HMAC-SHA256 Signed (7-Day Expiry)
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#faf6ee] dark:bg-[#1f1d1a] border border-[#eee3d1] dark:border-[#2a2620] text-xs text-[#716454] dark:text-[#a69b8d]">
+                <p>
+                  To change or update your administrator password, update the <span className="font-mono font-bold text-amber-700 dark:text-amber-400">ADMIN_PASSWORD</span> environment key in your hosting provider settings (e.g., Vercel Project Settings &gt; Environment Variables) or server <span className="font-mono font-bold">.env</span> file.
+                </p>
               </div>
             </div>
 

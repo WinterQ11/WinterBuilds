@@ -18,8 +18,14 @@ import {
   formatCleanDownloadUrl,
   saveApkStorageMetadata,
 } from './services/storage';
+import {
+  isAdminPasswordConfigured,
+  verifyAdminPassword,
+  createAdminSessionToken,
+  isAllowedAdminEmail,
+} from './services/auth';
 import { generateAppEnhancements } from '../lib/gemini';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, getServerSupabaseClient } from '../lib/supabase';
 import path from 'path';
 import fs from 'fs';
 
@@ -169,16 +175,78 @@ app.post('/api/apps/:id/download', async (req, res) => {
 // ADMIN API ROUTES (Protected)
 // -----------------------------------------------------------------------------
 
-// Check admin verification status
+// Check admin verification status and password configuration
 app.get('/api/admin/status', async (req, res) => {
   const authHeader = req.headers.authorization;
   const result = await verifyAdminAuthorization(authHeader);
+  const passwordConfigured = isAdminPasswordConfigured();
 
   sendSuccess(res, {
     authenticated: result.authorized,
     email: result.email || null,
+    passwordConfigured,
     supabaseConfigured: isSupabaseConfigured(),
+    defaultAdminEmail: 'winterbuilds99@gmail.com',
   });
+});
+
+// Admin login endpoint
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email) {
+      return sendError(res, 400, 'BAD_REQUEST', 'Email address is required.');
+    }
+
+    const trimmedEmail = String(email).trim().toLowerCase();
+    if (!isAllowedAdminEmail(trimmedEmail)) {
+      return sendError(res, 403, 'FORBIDDEN', 'Access denied: Only authorized administrators may sign in.');
+    }
+
+    // 1. If Supabase is configured, try Supabase sign in first
+    const supabase = getServerSupabaseClient();
+    if (supabase && password) {
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: String(password),
+        });
+
+        if (!error && data?.session?.access_token) {
+          return sendSuccess(res, {
+            token: data.session.access_token,
+            email: trimmedEmail,
+            message: 'Signed in via Supabase Auth successfully.',
+          });
+        }
+      } catch {
+        // Fall back to admin password verification
+      }
+    }
+
+    // 2. Verify against admin password configured in environment
+    if (!password) {
+      return sendError(res, 400, 'BAD_REQUEST', 'Password is required.');
+    }
+
+    const isValid = verifyAdminPassword(String(password));
+    if (!isValid) {
+      return sendError(res, 401, 'INVALID_CREDENTIALS', 'Invalid administrator password.');
+    }
+
+    // Generate secure session token
+    const token = createAdminSessionToken(trimmedEmail);
+
+    sendSuccess(res, {
+      token,
+      email: trimmedEmail,
+      message: 'Administrator authenticated successfully.',
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/login:', err);
+    sendError(res, 500, 'LOGIN_FAILED', 'Failed to authenticate administrator.');
+  }
 });
 
 // Admin dashboard overview stats

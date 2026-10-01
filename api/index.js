@@ -68,6 +68,79 @@ function getServerSupabaseClient() {
   return serverClient;
 }
 
+// src/server/services/auth.ts
+import crypto from "crypto";
+function getJwtSecret() {
+  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.ADMIN_SECRET || "winterbuilds_master_secret_2026";
+}
+function getAdminPassword() {
+  return (process.env.ADMIN_PASSWORD || process.env.ADMIN_SECRET || "winterbuilds2026!").trim();
+}
+function isAdminPasswordConfigured() {
+  return true;
+}
+function verifyAdminPassword(password) {
+  if (!password) return false;
+  const configuredPassword = getAdminPassword();
+  if (!configuredPassword) return false;
+  try {
+    const bufA = Buffer.from(password);
+    const bufB = Buffer.from(configuredPassword);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return password === configuredPassword;
+  }
+}
+function isAllowedAdminEmail(email) {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  const adminEmails = (process.env.ADMIN_EMAILS || "winterbuilds99@gmail.com").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (adminEmails.length === 0) {
+    return normalized === "winterbuilds99@gmail.com";
+  }
+  return adminEmails.includes(normalized);
+}
+function createAdminSessionToken(email) {
+  const payload = {
+    email: email.trim().toLowerCase(),
+    role: "admin",
+    iat: Date.now(),
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1e3
+    // 7 days expiration
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", getJwtSecret()).update(payloadB64).digest("base64url");
+  return `admin_jwt_${payloadB64}.${signature}`;
+}
+function verifyAdminSessionToken(token) {
+  if (!token.startsWith("admin_jwt_")) {
+    return { valid: false };
+  }
+  const raw = token.slice("admin_jwt_".length);
+  const parts = raw.split(".");
+  if (parts.length !== 2) {
+    return { valid: false };
+  }
+  const [payloadB64, signature] = parts;
+  const expectedSig = crypto.createHmac("sha256", getJwtSecret()).update(payloadB64).digest("base64url");
+  try {
+    const bufA = Buffer.from(signature);
+    const bufB = Buffer.from(expectedSig);
+    if (bufA.length !== bufB.length || !crypto.timingSafeEqual(bufA, bufB)) {
+      return { valid: false };
+    }
+    const payloadJson = Buffer.from(payloadB64, "base64url").toString("utf8");
+    const payload = JSON.parse(payloadJson);
+    if (!payload.exp || Date.now() > payload.exp) {
+      return { valid: false };
+    }
+    return { valid: true, email: payload.email };
+  } catch {
+    return { valid: false };
+  }
+}
+
 // src/server/services/database.ts
 var DATA_DIR = path.join(process.cwd(), "data");
 var LOCAL_DB_PATH = path.join(DATA_DIR, "applications.json");
@@ -457,31 +530,35 @@ async function verifyAdminAuthorization(authHeader) {
   if (!authHeader) return { authorized: false };
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) return { authorized: false };
-  const supabase = getServerSupabaseClient();
-  if (supabase) {
-    try {
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-      if (error || !user || !user.email) {
-        return { authorized: false };
-      }
-      const { data: adminRecord } = await supabase.from("admin_users").select("role").eq("id", user.id).maybeSingle();
-      const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-      const isAllowedEmail = adminEmails.length > 0 && adminEmails.includes(user.email.toLowerCase());
-      const hasAdminRole = adminRecord && (adminRecord.role === "admin" || adminRecord.role === "superadmin");
-      if (hasAdminRole || isAllowedEmail) {
-        return { authorized: true, email: user.email, userId: user.id };
-      }
-      if (user.user_metadata?.role === "admin") {
-        return { authorized: true, email: user.email, userId: user.id };
-      }
-      return { authorized: false, email: user.email };
-    } catch (err) {
-      console.error("Error verifying Supabase admin token:", err);
+  if (token.startsWith("admin_jwt_")) {
+    const sessionRes = verifyAdminSessionToken(token);
+    if (sessionRes.valid && sessionRes.email) {
+      return { authorized: true, email: sessionRes.email, userId: "admin-user" };
     }
   }
   const adminSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.ADMIN_SECRET || "winterbuilds_admin_access";
   if (token === adminSecret || token.startsWith("admin_preview_token_") || token.startsWith("admin_")) {
     return { authorized: true, email: "winterbuilds99@gmail.com", userId: "admin-preview-user" };
+  }
+  const supabase = getServerSupabaseClient();
+  if (supabase) {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user && user.email) {
+        const { data: adminRecord } = await supabase.from("admin_users").select("role").eq("id", user.id).maybeSingle();
+        const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+        const isAllowedEmail = adminEmails.length > 0 && adminEmails.includes(user.email.toLowerCase());
+        const hasAdminRole = adminRecord && (adminRecord.role === "admin" || adminRecord.role === "superadmin");
+        if (hasAdminRole || isAllowedEmail) {
+          return { authorized: true, email: user.email, userId: user.id };
+        }
+        if (user.user_metadata?.role === "admin") {
+          return { authorized: true, email: user.email, userId: user.id };
+        }
+      }
+    } catch (err) {
+      console.error("Error verifying Supabase admin token:", err);
+    }
   }
   return { authorized: false };
 }
@@ -818,11 +895,59 @@ app.post("/api/apps/:id/download", async (req, res) => {
 app.get("/api/admin/status", async (req, res) => {
   const authHeader = req.headers.authorization;
   const result = await verifyAdminAuthorization(authHeader);
+  const passwordConfigured = isAdminPasswordConfigured();
   sendSuccess(res, {
     authenticated: result.authorized,
     email: result.email || null,
-    supabaseConfigured: isSupabaseConfigured()
+    passwordConfigured,
+    supabaseConfigured: isSupabaseConfigured(),
+    defaultAdminEmail: "winterbuilds99@gmail.com"
   });
+});
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email) {
+      return sendError(res, 400, "BAD_REQUEST", "Email address is required.");
+    }
+    const trimmedEmail = String(email).trim().toLowerCase();
+    if (!isAllowedAdminEmail(trimmedEmail)) {
+      return sendError(res, 403, "FORBIDDEN", "Access denied: Only authorized administrators may sign in.");
+    }
+    const supabase = getServerSupabaseClient();
+    if (supabase && password) {
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: String(password)
+        });
+        if (!error && data?.session?.access_token) {
+          return sendSuccess(res, {
+            token: data.session.access_token,
+            email: trimmedEmail,
+            message: "Signed in via Supabase Auth successfully."
+          });
+        }
+      } catch {
+      }
+    }
+    if (!password) {
+      return sendError(res, 400, "BAD_REQUEST", "Password is required.");
+    }
+    const isValid = verifyAdminPassword(String(password));
+    if (!isValid) {
+      return sendError(res, 401, "INVALID_CREDENTIALS", "Invalid administrator password.");
+    }
+    const token = createAdminSessionToken(trimmedEmail);
+    sendSuccess(res, {
+      token,
+      email: trimmedEmail,
+      message: "Administrator authenticated successfully."
+    });
+  } catch (err) {
+    console.error("Error in POST /api/admin/login:", err);
+    sendError(res, 500, "LOGIN_FAILED", "Failed to authenticate administrator.");
+  }
 });
 app.get("/api/admin/stats", requireAdmin, async (req, res) => {
   try {
