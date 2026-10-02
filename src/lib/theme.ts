@@ -37,6 +37,9 @@ export function applyTheme(theme: Theme) {
 
   try {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('theme-change', { detail: { theme } }));
+    }
   } catch {
     // ignore
   }
