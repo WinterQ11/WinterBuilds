@@ -24,5 +24,19 @@
     "sanitizedStorageName": "1790860193458_sample-app.apk",
     "storagePath": "apps/pending/apk/1790860193458_sample-app.apk",
     "uploadedAt": "2026-10-01T13:09:53.470Z"
+  },
+  "apps/pending/apk/1790934535790_sqplus.apk": {
+    "originalFileName": "SQPlus.apk",
+    "sanitizedStorageName": "1790934535790_sqplus.apk",
+    "storagePath": "apps/pending/apk/1790934535790_sqplus.apk",
+    "uploadedAt": "2026-10-02T09:49:09.926Z",
+    "preferredDownloadName": "Files"
+  },
+  "apps/test-27mb/apk/1790934878495_large-app.apk": {
+    "originalFileName": "large-app.apk",
+    "sanitizedStorageName": "large-app.apk",
+    "storagePath": "apps/test-27mb/apk/1790934878495_large-app.apk",
+    "uploadedAt": "2026-10-02T09:54:38.495Z",
+    "preferredDownloadName": "Large App"
   }
 }

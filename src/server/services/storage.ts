@@ -202,6 +202,7 @@ export async function createUploadAuthorization(params: {
   fileName: string;
   contentType?: string;
   appName?: string;
+  fileSize?: number;
 }): Promise<UploadAuthorization> {
   const supabase = getServerSupabaseClient();
   const originalFileName = path.basename(params.fileName || 'application.apk');
@@ -217,12 +218,32 @@ export async function createUploadAuthorization(params: {
 
   if (supabase) {
     try {
-      const bucket = process.env.VITE_SUPABASE_APK_BUCKET || 'apks';
+      const bucket = process.env.VITE_SUPABASE_APK_BUCKET || process.env.SUPABASE_APK_BUCKET || 'apks';
       
-      // Create signed upload URL from Supabase Storage
+      // Auto-configure bucket settings to allow >= 100 MB files (up to 500 MB)
+      try {
+        const { data: bucketInfo } = await supabase.storage.getBucket(bucket);
+        if (!bucketInfo) {
+          await supabase.storage.createBucket(bucket, {
+            public: true,
+            fileSizeLimit: 524288000, // 500 MB
+            allowedMimeTypes: ['*/*'],
+          });
+        } else if (bucketInfo.file_size_limit && bucketInfo.file_size_limit < 104857600) {
+          await supabase.storage.updateBucket(bucket, {
+            public: true,
+            fileSizeLimit: 524288000,
+            allowedMimeTypes: ['*/*'],
+          });
+        }
+      } catch {
+        // Non-critical if service role doesn't have bucket schema management permissions
+      }
+
+      // Create signed upload URL from Supabase Storage directly for the browser
       const { data, error } = await supabase.storage
         .from(bucket)
-        .createSignedUploadUrl(storagePath);
+        .createSignedUploadUrl(storagePath, { upsert: true });
 
       if (error) {
         if (isDnsOrNetworkError(error)) {
@@ -241,6 +262,7 @@ export async function createUploadAuthorization(params: {
           originalFileName,
           headers: {
             'Content-Type': params.contentType || 'application/vnd.android.package-archive',
+            'x-upsert': 'true',
           },
         };
       }
@@ -251,6 +273,15 @@ export async function createUploadAuthorization(params: {
         throw err;
       }
     }
+  }
+
+  // If Supabase is not configured and running on Vercel, check Vercel's 4.5 MB payload limit
+  const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+  if (isVercel && params.fileSize && params.fileSize > 4.5 * 1024 * 1024) {
+    const sizeMb = (params.fileSize / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Direct upload of ${sizeMb} MB APK requires Supabase Storage in production. Vercel serverless functions strictly reject payloads exceeding 4.5 MB. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel Project Environment Variables to enable direct-to-storage uploads of at least 100 MB.`
+    );
   }
 
   // Fallback direct storage handler with signed upload token

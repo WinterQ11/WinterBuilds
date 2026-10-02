@@ -244,7 +244,13 @@ export const api = {
     });
   },
 
-  async authorizeUpload(params: { appId?: string; fileName: string; contentType?: string; appName?: string }): Promise<{
+  async authorizeUpload(params: {
+    appId?: string;
+    fileName: string;
+    contentType?: string;
+    appName?: string;
+    fileSize?: number;
+  }): Promise<{
     uploadUrl: string;
     method: 'PUT' | 'POST';
     path: string;

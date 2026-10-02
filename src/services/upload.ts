@@ -39,6 +39,7 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
     appId: appId || 'pending',
     fileName: file.name,
     contentType: file.type || 'application/vnd.android.package-archive',
+    fileSize: file.size,
     appName,
   });
 
@@ -106,9 +107,11 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
         let errMessage = '';
         try {
           const parsed = JSON.parse(xhr.responseText);
-          errMessage = parsed.error?.message || parsed.message || '';
+          errMessage = parsed.error?.message || parsed.message || (typeof parsed.error === 'string' ? parsed.error : '');
         } catch {
-          // keep empty
+          if (xhr.responseText && xhr.responseText.length < 300) {
+            errMessage = xhr.responseText.trim();
+          }
         }
 
         if (xhr.status === 401) {
@@ -116,7 +119,18 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
         } else if (xhr.status === 403) {
           reject(new Error(errMessage || "You don't have permission to upload this app."));
         } else if (xhr.status === 413) {
-          reject(new Error('Storage provider rejected this request size.'));
+          if (auth.provider === 'direct') {
+            const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+            reject(new Error(
+              `Upload rejected: Vercel serverless request body is limited to 4.5 MB (${sizeMb} MB file attempted). Please configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel project environment variables to enable direct browser-to-storage uploads of at least 100 MB.`
+            ));
+          } else {
+            const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+            reject(new Error(
+              errMessage ||
+              `Storage provider rejected file size (${sizeMb} MB). In Supabase Dashboard, open Storage -> Buckets -> "apks" -> Edit Bucket, and increase "Maximum file size" to 500 MB (or leave blank for unlimited).`
+            ));
+          }
         } else {
           reject(new Error(errMessage || xhr.statusText || `Storage rejected upload with status ${xhr.status}`));
         }
@@ -131,7 +145,11 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
       reject(new Error('Upload timed out. Please try again.'));
     };
 
-    xhr.open(auth.method, auth.uploadUrl, true);
+    const targetUrl = auth.uploadUrl.startsWith('http') || auth.uploadUrl.startsWith('/')
+      ? auth.uploadUrl
+      : `/${auth.uploadUrl}`;
+
+    xhr.open(auth.method, targetUrl, true);
 
     // Apply custom headers if provider specifies (e.g. Supabase signed upload token or Content-Type)
     let hasContentType = false;
@@ -144,11 +162,8 @@ export async function uploadApkDirect(options: UploadOptions): Promise<UploadRes
       }
     }
 
-    if (!hasAuth) {
-      const token = auth.token;
-      if (token) {
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      }
+    if (!hasAuth && auth.token && auth.provider === 'direct') {
+      xhr.setRequestHeader('Authorization', `Bearer ${auth.token}`);
     }
 
     if (!hasContentType) {

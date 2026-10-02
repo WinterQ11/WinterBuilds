@@ -49,12 +49,33 @@ export function normalizeSupabaseKey(rawKey?: string): string {
   return cleaned.replace(/^["']|["']$/g, '').trim();
 }
 
-// Browser-accessible public environment variables (clean project base URL ONLY)
-const rawUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || process.env.VITE_SUPABASE_URL || '';
-const rawAnonKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || process.env.VITE_SUPABASE_ANON_KEY || '';
+export function getSupabaseUrl(): string {
+  const raw =
+    (typeof process !== 'undefined' && (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL)) ||
+    (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_SUPABASE_URL || (import.meta.env as any)?.SUPABASE_URL)) ||
+    '';
+  return normalizeSupabaseUrl(raw);
+}
 
-const SUPABASE_URL = normalizeSupabaseUrl(rawUrl);
-const SUPABASE_ANON_KEY = normalizeSupabaseKey(rawAnonKey);
+export function getSupabaseAnonKey(): string {
+  const raw =
+    (typeof process !== 'undefined' && (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY)) ||
+    (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_SUPABASE_ANON_KEY || (import.meta.env as any)?.SUPABASE_ANON_KEY)) ||
+    '';
+  return normalizeSupabaseKey(raw);
+}
+
+export function getSupabaseServiceRoleKey(): string {
+  const raw =
+    (typeof process !== 'undefined' && (
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SERVICE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+    )) ||
+    '';
+  return normalizeSupabaseKey(raw);
+}
 
 let browserClient: SupabaseClient | null = null;
 let serverClient: SupabaseClient | null = null;
@@ -106,7 +127,10 @@ export function markSupabaseHostReachable(): void {
  * Returns true if public Supabase credentials are provided and valid.
  */
 export function isSupabaseConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && !SUPABASE_URL.includes('your-project-ref'));
+  const url = getSupabaseUrl();
+  const anon = getSupabaseAnonKey();
+  const service = getSupabaseServiceRoleKey();
+  return Boolean(url && (anon || service) && !url.includes('your-project-ref'));
 }
 
 /**
@@ -121,13 +145,16 @@ export function isSupabaseConnected(): boolean {
  * Returns null if Supabase is not configured or marked unreachable.
  */
 export function getSupabaseClient(): SupabaseClient | null {
-  if (!isSupabaseConfigured() || !supabaseHostReachable) {
+  const url = getSupabaseUrl();
+  const anonKey = getSupabaseAnonKey() || getSupabaseServiceRoleKey();
+
+  if (!url || !anonKey || url.includes('your-project-ref') || !supabaseHostReachable) {
     return null;
   }
 
   if (!browserClient) {
     try {
-      browserClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      browserClient = createClient(url, anonKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
@@ -143,15 +170,15 @@ export function getSupabaseClient(): SupabaseClient | null {
 }
 
 /**
- * Server-side Supabase client using the SERVICE ROLE secret key.
+ * Server-side Supabase client using the SERVICE ROLE secret key (or anon key).
  * Only callable in server environments (Express, Vercel Serverless).
  * Returns null if Supabase is not configured or host is unreachable.
  */
 export function getServerSupabaseClient(): SupabaseClient | null {
-  const serviceKey = normalizeSupabaseKey(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const projectUrl = normalizeSupabaseUrl(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL);
+  const projectUrl = getSupabaseUrl();
+  const key = getSupabaseServiceRoleKey() || getSupabaseAnonKey();
 
-  if (!projectUrl || !serviceKey || projectUrl.includes('your-project-ref')) {
+  if (!projectUrl || !key || projectUrl.includes('your-project-ref')) {
     return null;
   }
 
@@ -166,7 +193,7 @@ export function getServerSupabaseClient(): SupabaseClient | null {
 
   if (!serverClient) {
     try {
-      serverClient = createClient(projectUrl, serviceKey, {
+      serverClient = createClient(projectUrl, key, {
         auth: {
           persistSession: false,
           autoRefreshToken: false,
@@ -178,26 +205,4 @@ export function getServerSupabaseClient(): SupabaseClient | null {
   }
 
   return serverClient;
-}
-
-// Initial asynchronous DNS health check in Node.js environments
-if (typeof process !== 'undefined' && process.versions?.node) {
-  try {
-    const rawCheckUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL;
-    const url = normalizeSupabaseUrl(rawCheckUrl);
-    if (url && !url.includes('your-project-ref')) {
-      const hostname = new URL(url).hostname;
-      import('dns').then((dns) => {
-        dns.lookup(hostname, (err) => {
-          if (err) {
-            markSupabaseHostUnreachable(`DNS resolution: ${err.code || err.message}`);
-          } else {
-            markSupabaseHostReachable();
-          }
-        });
-      }).catch(() => {});
-    }
-  } catch {
-    // Ignore URL parse errors on initial check
-  }
 }

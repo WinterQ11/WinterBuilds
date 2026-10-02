@@ -7,9 +7,9 @@ import path from "path";
 
 // src/lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
-function normalizeSupabaseUrl(rawUrl2) {
-  if (!rawUrl2) return "";
-  let cleaned = String(rawUrl2).trim();
+function normalizeSupabaseUrl(rawUrl) {
+  if (!rawUrl) return "";
+  let cleaned = String(rawUrl).trim();
   if (cleaned.startsWith("VITE_SUPABASE_URL=")) {
     cleaned = cleaned.replace(/^VITE_SUPABASE_URL=/, "").trim();
   }
@@ -38,10 +38,18 @@ function normalizeSupabaseKey(rawKey) {
   }
   return cleaned.replace(/^["']|["']$/g, "").trim();
 }
-var rawUrl = typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-var rawAnonKey = typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-var SUPABASE_URL = normalizeSupabaseUrl(rawUrl);
-var SUPABASE_ANON_KEY = normalizeSupabaseKey(rawAnonKey);
+function getSupabaseUrl() {
+  const raw = typeof process !== "undefined" && (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL) || typeof import.meta !== "undefined" && (import.meta.env?.VITE_SUPABASE_URL || import.meta.env?.SUPABASE_URL) || "";
+  return normalizeSupabaseUrl(raw);
+}
+function getSupabaseAnonKey() {
+  const raw = typeof process !== "undefined" && (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY) || typeof import.meta !== "undefined" && (import.meta.env?.VITE_SUPABASE_ANON_KEY || import.meta.env?.SUPABASE_ANON_KEY) || "";
+  return normalizeSupabaseKey(raw);
+}
+function getSupabaseServiceRoleKey() {
+  const raw = typeof process !== "undefined" && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY) || "";
+  return normalizeSupabaseKey(raw);
+}
 var serverClient = null;
 var supabaseHostReachable = true;
 var lastReachabilityCheck = 0;
@@ -58,19 +66,19 @@ function markSupabaseHostUnreachable(errorReason) {
     console.warn(`[WinterBuilds Storage] Supabase host is currently unreachable (${errorReason || "network/DNS error"}). Falling back to resilient local storage mode.`);
   }
 }
-function markSupabaseHostReachable() {
-  supabaseHostReachable = true;
-}
 function isSupabaseConfigured() {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && !SUPABASE_URL.includes("your-project-ref"));
+  const url = getSupabaseUrl();
+  const anon = getSupabaseAnonKey();
+  const service = getSupabaseServiceRoleKey();
+  return Boolean(url && (anon || service) && !url.includes("your-project-ref"));
 }
 function isSupabaseConnected() {
   return isSupabaseConfigured() && supabaseHostReachable;
 }
 function getServerSupabaseClient() {
-  const serviceKey = normalizeSupabaseKey(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const projectUrl = normalizeSupabaseUrl(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL);
-  if (!projectUrl || !serviceKey || projectUrl.includes("your-project-ref")) {
+  const projectUrl = getSupabaseUrl();
+  const key = getSupabaseServiceRoleKey() || getSupabaseAnonKey();
+  if (!projectUrl || !key || projectUrl.includes("your-project-ref")) {
     return null;
   }
   if (!supabaseHostReachable) {
@@ -81,7 +89,7 @@ function getServerSupabaseClient() {
   }
   if (!serverClient) {
     try {
-      serverClient = createClient(projectUrl, serviceKey, {
+      serverClient = createClient(projectUrl, key, {
         auth: {
           persistSession: false,
           autoRefreshToken: false
@@ -92,26 +100,6 @@ function getServerSupabaseClient() {
     }
   }
   return serverClient;
-}
-if (typeof process !== "undefined" && process.versions?.node) {
-  try {
-    const rawCheckUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || SUPABASE_URL;
-    const url = normalizeSupabaseUrl(rawCheckUrl);
-    if (url && !url.includes("your-project-ref")) {
-      const hostname = new URL(url).hostname;
-      import("dns").then((dns) => {
-        dns.lookup(hostname, (err) => {
-          if (err) {
-            markSupabaseHostUnreachable(`DNS resolution: ${err.code || err.message}`);
-          } else {
-            markSupabaseHostReachable();
-          }
-        });
-      }).catch(() => {
-      });
-    }
-  } catch {
-  }
 }
 
 // src/server/services/auth.ts
@@ -861,22 +849,22 @@ function generateApkDownloadFileName(appName, fallbackPathOrOriginal) {
   }
   return "application.apk";
 }
-function formatCleanDownloadUrl(rawUrl2, storagePath, preferredName) {
+function formatCleanDownloadUrl(rawUrl, storagePath, preferredName) {
   const downloadFileName = generateApkDownloadFileName(preferredName, storagePath);
-  if (!rawUrl2 || rawUrl2.startsWith("/api/")) {
+  if (!rawUrl || rawUrl.startsWith("/api/")) {
     return `/api/downloads/${encodeURIComponent(storagePath)}?filename=${encodeURIComponent(downloadFileName)}`;
   }
-  if (rawUrl2.includes("/storage/v1/object/public/")) {
+  if (rawUrl.includes("/storage/v1/object/public/")) {
     try {
-      const url = new URL(rawUrl2);
+      const url = new URL(rawUrl);
       url.searchParams.set("download", downloadFileName);
       return url.toString();
     } catch {
-      const separator = rawUrl2.includes("?") ? "&" : "?";
-      return `${rawUrl2}${separator}download=${encodeURIComponent(downloadFileName)}`;
+      const separator = rawUrl.includes("?") ? "&" : "?";
+      return `${rawUrl}${separator}download=${encodeURIComponent(downloadFileName)}`;
     }
   }
-  return rawUrl2;
+  return rawUrl;
 }
 function sanitizeStorageFileName(name) {
   return name.toLowerCase().replace(/[^a-z0-9_.-]/g, "_").replace(/_{2,}/g, "_");
@@ -893,8 +881,26 @@ async function createUploadAuthorization(params) {
   });
   if (supabase) {
     try {
-      const bucket = process.env.VITE_SUPABASE_APK_BUCKET || "apks";
-      const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(storagePath);
+      const bucket = process.env.VITE_SUPABASE_APK_BUCKET || process.env.SUPABASE_APK_BUCKET || "apks";
+      try {
+        const { data: bucketInfo } = await supabase.storage.getBucket(bucket);
+        if (!bucketInfo) {
+          await supabase.storage.createBucket(bucket, {
+            public: true,
+            fileSizeLimit: 524288e3,
+            // 500 MB
+            allowedMimeTypes: ["*/*"]
+          });
+        } else if (bucketInfo.file_size_limit && bucketInfo.file_size_limit < 104857600) {
+          await supabase.storage.updateBucket(bucket, {
+            public: true,
+            fileSizeLimit: 524288e3,
+            allowedMimeTypes: ["*/*"]
+          });
+        }
+      } catch {
+      }
+      const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(storagePath, { upsert: true });
       if (error) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
@@ -911,7 +917,8 @@ async function createUploadAuthorization(params) {
           provider: "supabase",
           originalFileName,
           headers: {
-            "Content-Type": params.contentType || "application/vnd.android.package-archive"
+            "Content-Type": params.contentType || "application/vnd.android.package-archive",
+            "x-upsert": "true"
           }
         };
       }
@@ -922,6 +929,13 @@ async function createUploadAuthorization(params) {
         throw err;
       }
     }
+  }
+  const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+  if (isVercel && params.fileSize && params.fileSize > 4.5 * 1024 * 1024) {
+    const sizeMb = (params.fileSize / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Direct upload of ${sizeMb} MB APK requires Supabase Storage in production. Vercel serverless functions strictly reject payloads exceeding 4.5 MB. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel Project Environment Variables to enable direct-to-storage uploads of at least 100 MB.`
+    );
   }
   const uploadToken = createAdminSessionToken("winterbuilds99@gmail.com");
   return {
@@ -1314,7 +1328,7 @@ app.delete("/api/apps/:id", requireAdmin, async (req, res) => {
 });
 app.post("/api/upload/authorize", requireAdmin, async (req, res) => {
   try {
-    const { appId, fileName, contentType, appName } = req.body;
+    const { appId, fileName, contentType, appName, fileSize } = req.body;
     if (!fileName) {
       return sendError(res, 400, "BAD_REQUEST", "fileName is required.");
     }
@@ -1322,7 +1336,8 @@ app.post("/api/upload/authorize", requireAdmin, async (req, res) => {
       appId: appId || "pending",
       fileName,
       contentType,
-      appName
+      appName,
+      fileSize: Number(fileSize) || void 0
     });
     sendSuccess(res, auth);
   } catch (err) {

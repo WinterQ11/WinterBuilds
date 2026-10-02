@@ -376,7 +376,7 @@ app.delete('/api/apps/:id', requireAdmin, async (req, res) => {
 // Authorize direct-to-storage upload
 app.post('/api/upload/authorize', requireAdmin, async (req, res) => {
   try {
-    const { appId, fileName, contentType, appName } = req.body;
+    const { appId, fileName, contentType, appName, fileSize } = req.body;
 
     if (!fileName) {
       return sendError(res, 400, 'BAD_REQUEST', 'fileName is required.');
@@ -387,6 +387,7 @@ app.post('/api/upload/authorize', requireAdmin, async (req, res) => {
       fileName,
       contentType,
       appName,
+      fileSize: Number(fileSize) || undefined,
     });
 
     sendSuccess(res, auth);
