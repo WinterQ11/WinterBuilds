@@ -54,17 +54,25 @@ var serverClient = null;
 var supabaseHostReachable = true;
 var lastReachabilityCheck = 0;
 var RETRY_INTERVAL_MS = 6e4;
+var lastVerifiedConnected = null;
+var lastVerifiedError = null;
+var lastVerifiedTime = 0;
+var VERIFY_CACHE_TTL_MS = 15e3;
 function isDnsOrNetworkError(err) {
   if (!err) return false;
   const msg = typeof err === "string" ? err : `${err.message || ""} ${err.details || ""} ${err.code || ""} ${JSON.stringify(err)}`;
   return msg.includes("ENOTFOUND") || msg.includes("getaddrinfo") || msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
 }
 function markSupabaseHostUnreachable(errorReason) {
-  if (supabaseHostReachable) {
-    supabaseHostReachable = false;
-    lastReachabilityCheck = Date.now();
-    console.warn(`[WinterBuilds Storage] Supabase host is currently unreachable (${errorReason || "network/DNS error"}). Falling back to resilient local storage mode.`);
-  }
+  supabaseHostReachable = false;
+  lastVerifiedConnected = false;
+  lastVerifiedError = errorReason || "Host unreachable";
+  lastReachabilityCheck = Date.now();
+}
+function markSupabaseHostReachable() {
+  supabaseHostReachable = true;
+  lastVerifiedConnected = true;
+  lastVerifiedError = null;
 }
 function isSupabaseConfigured() {
   const url = getSupabaseUrl();
@@ -72,8 +80,74 @@ function isSupabaseConfigured() {
   const service = getSupabaseServiceRoleKey();
   return Boolean(url && (anon || service) && !url.includes("your-project-ref"));
 }
-function isSupabaseConnected() {
-  return isSupabaseConfigured() && supabaseHostReachable;
+async function verifySupabaseConnection() {
+  if (!isSupabaseConfigured()) {
+    return {
+      connected: false,
+      configured: false,
+      url: "",
+      error: "Supabase credentials are not configured in environment variables."
+    };
+  }
+  if (lastVerifiedTime > 0 && Date.now() - lastVerifiedTime < VERIFY_CACHE_TTL_MS && lastVerifiedConnected !== null) {
+    return {
+      connected: lastVerifiedConnected,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: lastVerifiedError
+    };
+  }
+  const client = getServerSupabaseClient();
+  if (!client) {
+    lastVerifiedConnected = false;
+    lastVerifiedError = "Failed to initialize Supabase client with provided credentials.";
+    lastVerifiedTime = Date.now();
+    return {
+      connected: false,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: lastVerifiedError
+    };
+  }
+  try {
+    const { error } = await client.from("applications").select("id").limit(1);
+    lastVerifiedTime = Date.now();
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        return {
+          connected: false,
+          configured: true,
+          url: getSupabaseUrl(),
+          error: `Supabase host unreachable (${error.message}). If using the Free tier, please verify in the Supabase Dashboard that your project is not paused.`
+        };
+      }
+      lastVerifiedConnected = false;
+      lastVerifiedError = `Supabase database error: ${error.message}`;
+      return {
+        connected: false,
+        configured: true,
+        url: getSupabaseUrl(),
+        error: lastVerifiedError
+      };
+    }
+    markSupabaseHostReachable();
+    return {
+      connected: true,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: null
+    };
+  } catch (err) {
+    lastVerifiedTime = Date.now();
+    markSupabaseHostUnreachable(err?.message);
+    return {
+      connected: false,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: `Supabase connection failed: ${err?.message || "Network failure"}`
+    };
+  }
 }
 function getServerSupabaseClient() {
   const projectUrl = getSupabaseUrl();
@@ -232,199 +306,105 @@ function getLocalDbPath() {
   return path.join(getDataDir(), "applications.json");
 }
 var inMemoryApps = null;
-var INITIAL_APPLICATIONS = [
-  {
-    id: "1a91e5d2-b062-42ec-a077-24a7378d3011",
-    name: "Signal Messenger",
-    slug: "signal-messenger",
-    package_name: "org.thoughtcrime.securesms",
-    version_name: "7.15.2",
-    version_code: 141200,
-    short_description: "Fast, simple, and secure private messaging with end-to-end encryption.",
-    description: "Signal is a messaging and voice call app with privacy at its core. State-of-the-art end-to-end encryption keeps your conversations secure. We can't read your messages or listen to your calls, and no one else can either. Privacy isn't an optional mode \u2014 it's just the way that Signal works.",
-    category: "Communication",
-    icon_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=256&auto=format&fit=crop&q=80",
-    screenshots: [
-      "https://images.unsplash.com/photo-1616469829941-c7200edec809?w=800&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1577563908411-5077b6dc7624?w=800&auto=format&fit=crop&q=80"
-    ],
-    apk_storage_path: "apps/signal/apk/signal-7.15.2.apk",
-    apk_download_url: "https://github.com/signalapp/Signal-Android/releases",
-    apk_file_size: 64820300,
-    apk_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    min_sdk: 21,
-    target_sdk: 34,
-    downloads_count: 14205,
-    status: "published",
-    featured: true,
-    created_at: "2026-08-10T12:00:00Z",
-    updated_at: "2026-09-18T10:15:00Z",
-    published_at: "2026-08-10T12:05:00Z"
-  },
-  {
-    id: "2b82f6e3-c173-53fd-b188-35b8489e4122",
-    name: "VLC for Android",
-    slug: "vlc-for-android",
-    package_name: "org.videolan.vlc",
-    version_name: "3.5.4",
-    version_code: 3050400,
-    short_description: "The open-source multi-format media player for Android with equalizer and subtitles support.",
-    description: "VLC for Android is a full audio and video player that plays most local video and audio files, as well as network streams. It features a complete media library for audio and video files, auto-rotation, aspect-ratio adjustments, gestures to control volume, brightness and seeking.",
-    category: "Media & Video",
-    icon_url: "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=256&auto=format&fit=crop&q=80",
-    screenshots: [
-      "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=800&auto=format&fit=crop&q=80",
-      "https://images.unsplash.com/photo-1526738549149-8e07eca6c147?w=800&auto=format&fit=crop&q=80"
-    ],
-    apk_storage_path: "apps/vlc/apk/vlc-android-3.5.4.apk",
-    apk_download_url: "https://get.videolan.org/vlc-android/",
-    apk_file_size: 42105400,
-    apk_sha256: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
-    min_sdk: 21,
-    target_sdk: 34,
-    downloads_count: 28940,
-    status: "published",
-    featured: true,
-    created_at: "2026-07-20T14:30:00Z",
-    updated_at: "2026-09-12T08:00:00Z",
-    published_at: "2026-07-20T14:35:00Z"
-  },
-  {
-    id: "3c73a7f4-d284-64fe-c299-46c959af5233",
-    name: "Lawnchair Launcher",
-    slug: "lawnchair-launcher",
-    package_name: "ch.deletescape.lawnchair.plah",
-    version_name: "14.0.0",
-    version_code: 14e5,
-    short_description: "Customizable, open-source Pixel Launcher experience bringing Material You to Android.",
-    description: "Lawnchair is a free, open-source home app for Android. Taking Launcher3 from Android Open Source Project, it adds powerful customization features while maintaining a smooth and lightweight experience with Material You theming and QuickSwitch support.",
-    category: "Tools",
-    icon_url: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=256&auto=format&fit=crop&q=80",
-    screenshots: [
-      "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&auto=format&fit=crop&q=80"
-    ],
-    apk_storage_path: "apps/lawnchair/apk/lawnchair-14.apk",
-    apk_download_url: "https://lawnchair.app/",
-    apk_file_size: 213e5,
-    apk_sha256: "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
-    min_sdk: 26,
-    target_sdk: 34,
-    downloads_count: 8740,
-    status: "published",
-    featured: false,
-    created_at: "2026-08-01T16:00:00Z",
-    updated_at: "2026-09-15T18:20:00Z",
-    published_at: "2026-08-01T16:10:00Z"
-  },
-  {
-    id: "4d64b8a5-e395-75af-d3aa-57da6ab06344",
-    name: "NewPipe",
-    slug: "newpipe",
-    package_name: "org.schabi.newpipe",
-    version_name: "0.27.2",
-    version_code: 272,
-    short_description: "Lightweight YouTube frontend with background playback and privacy protection.",
-    description: "NewPipe is a free, lightweight streaming frontend for Android. It allows you to watch videos without intrusive ads or Google Play Services tracking. Features include background listening, popup picture-in-picture player, and media download.",
-    category: "Entertainment",
-    icon_url: "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=256&auto=format&fit=crop&q=80",
-    screenshots: [
-      "https://images.unsplash.com/photo-1512499617640-c74ae3a79d37?w=800&auto=format&fit=crop&q=80"
-    ],
-    apk_storage_path: "apps/newpipe/apk/NewPipe_v0.27.2.apk",
-    apk_download_url: "https://newpipe.net/",
-    apk_file_size: 1475e4,
-    apk_sha256: "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
-    min_sdk: 21,
-    target_sdk: 34,
-    downloads_count: 35120,
-    status: "published",
-    featured: true,
-    created_at: "2026-06-14T09:00:00Z",
-    updated_at: "2026-09-20T11:45:00Z",
-    published_at: "2026-06-14T09:15:00Z"
-  }
-];
+var DEMO_APP_IDS = /* @__PURE__ */ new Set([
+  "1a91e5d2-b062-42ec-a077-24a7378d3011",
+  // Signal
+  "2b82f6e3-c173-53fd-b188-35b8489e4122",
+  // VLC
+  "3c73a7f4-d284-64fe-c299-46c959af5233",
+  // Lawnchair
+  "4d64b8a5-e395-75af-d3aa-57da6ab06344"
+  // NewPipe
+]);
+var DEMO_APP_SLUGS = /* @__PURE__ */ new Set([
+  "signal-messenger",
+  "vlc-for-android",
+  "lawnchair-launcher",
+  "newpipe"
+]);
+function filterOutDemoApps(apps) {
+  return apps.filter(
+    (app2) => !DEMO_APP_IDS.has(app2.id) && !DEMO_APP_SLUGS.has(app2.slug)
+  );
+}
 function readLocalApps() {
-  if (inMemoryApps && inMemoryApps.length > 0) {
-    return [...inMemoryApps];
+  if (inMemoryApps !== null) {
+    return filterOutDemoApps([...inMemoryApps]);
   }
   const dbPath = getLocalDbPath();
   if (!fs.existsSync(dbPath)) {
-    try {
-      fs.writeFileSync(dbPath, JSON.stringify(INITIAL_APPLICATIONS, null, 2));
-    } catch {
-    }
-    inMemoryApps = [...INITIAL_APPLICATIONS];
-    return [...INITIAL_APPLICATIONS];
+    inMemoryApps = [];
+    return [];
   }
   try {
     const content = fs.readFileSync(dbPath, "utf-8");
     const apps = JSON.parse(content);
-    if (Array.isArray(apps) && apps.length > 0) {
-      inMemoryApps = apps;
-      return apps;
+    if (Array.isArray(apps)) {
+      const cleaned = filterOutDemoApps(apps);
+      inMemoryApps = cleaned;
+      return cleaned;
     }
-    inMemoryApps = [...INITIAL_APPLICATIONS];
-    return [...INITIAL_APPLICATIONS];
-  } catch (err) {
-    inMemoryApps = [...INITIAL_APPLICATIONS];
-    return [...INITIAL_APPLICATIONS];
+    inMemoryApps = [];
+    return [];
+  } catch {
+    inMemoryApps = [];
+    return [];
   }
 }
 function writeLocalApps(apps) {
-  inMemoryApps = [...apps];
+  const cleaned = filterOutDemoApps(apps);
+  inMemoryApps = [...cleaned];
   try {
     const dbPath = getLocalDbPath();
-    fs.writeFileSync(dbPath, JSON.stringify(apps, null, 2));
+    fs.writeFileSync(dbPath, JSON.stringify(cleaned, null, 2));
   } catch {
   }
 }
 async function listApplications(options = {}) {
   const supabase = getServerSupabaseClient();
   if (supabase) {
-    let query = supabase.from("applications").select("*", { count: "exact" });
-    if (options.status && options.status !== "all") {
-      query = query.eq("status", options.status);
-    } else if (!options.status) {
-      query = query.eq("status", "published");
-    }
-    if (options.category && options.category !== "All") {
-      query = query.eq("category", options.category);
-    }
-    if (options.featured !== void 0) {
-      query = query.eq("featured", options.featured);
-    }
-    if (options.search) {
-      const s = `%${options.search}%`;
-      query = query.or(`name.ilike.${s},package_name.ilike.${s},description.ilike.${s}`);
-    }
-    switch (options.sort) {
-      case "popular":
-        query = query.order("downloads_count", { ascending: false });
-        break;
-      case "updated":
-        query = query.order("updated_at", { ascending: false });
-        break;
-      case "name":
-        query = query.order("name", { ascending: true });
-        break;
-      case "latest":
-      default:
-        query = query.order("published_at", { ascending: false, nullsFirst: false });
-        break;
-    }
-    const limit = options.limit || 50;
-    const offset = options.offset || 0;
-    query = query.range(offset, offset + limit - 1);
     try {
+      let query = supabase.from("applications").select("*", { count: "exact" });
+      if (options.status && options.status !== "all") {
+        query = query.eq("status", options.status);
+      } else if (!options.status) {
+        query = query.eq("status", "published");
+      }
+      if (options.category && options.category !== "All") {
+        query = query.eq("category", options.category);
+      }
+      if (options.featured !== void 0) {
+        query = query.eq("featured", options.featured);
+      }
+      if (options.search) {
+        const s = `%${options.search}%`;
+        query = query.or(`name.ilike.${s},package_name.ilike.${s},description.ilike.${s}`);
+      }
+      switch (options.sort) {
+        case "popular":
+          query = query.order("downloads_count", { ascending: false });
+          break;
+        case "updated":
+          query = query.order("updated_at", { ascending: false });
+          break;
+        case "name":
+          query = query.order("name", { ascending: true });
+          break;
+        case "latest":
+        default:
+          query = query.order("published_at", { ascending: false, nullsFirst: false });
+          break;
+      }
+      const limit = options.limit || 50;
+      const offset = options.offset || 0;
+      query = query.range(offset, offset + limit - 1);
       const { data, error, count } = await query;
       if (error) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
-        } else {
-          console.error("Supabase listApplications error:", error);
+          return getFallbackLocalApplications(options);
         }
-        return getFallbackLocalApplications(options);
+        throw new Error(`Database query failed: ${error.message}`);
       }
       return {
         applications: data || [],
@@ -432,11 +412,10 @@ async function listApplications(options = {}) {
       };
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
-      } else {
-        console.error("Unexpected error executing Supabase listApplications:", err);
+        markSupabaseHostUnreachable(err?.message);
+        return getFallbackLocalApplications(options);
       }
-      return getFallbackLocalApplications(options);
+      throw err;
     }
   }
   return getFallbackLocalApplications(options);
@@ -494,16 +473,16 @@ async function getApplicationBySlug(slug) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
         } else {
-          console.error("Supabase getApplicationBySlug error:", error);
+          throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
         return data;
       }
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
+        markSupabaseHostUnreachable(err?.message);
       } else {
-        console.error("getApplicationBySlug unexpected error:", err);
+        throw err;
       }
     }
   }
@@ -519,16 +498,16 @@ async function getApplicationById(id) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
         } else {
-          console.error("Supabase getApplicationById error:", error);
+          throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
         return data;
       }
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
+        markSupabaseHostUnreachable(err?.message);
       } else {
-        console.error("getApplicationById unexpected error:", err);
+        throw err;
       }
     }
   }
@@ -548,23 +527,32 @@ async function createApplication(appData) {
   const supabase = getServerSupabaseClient();
   if (supabase) {
     try {
-      const { data, error } = await supabase.from("applications").insert([newApp]).select().single();
+      const { data, error } = await supabase.from("applications").insert([newApp]).select().maybeSingle();
       if (error) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
-        } else {
-          console.error("Supabase createApplication error:", error);
-          throw new Error(`Failed to save application: ${error.message}`);
+          const apps2 = readLocalApps();
+          apps2.unshift(newApp);
+          writeLocalApps(apps2);
+          return newApp;
         }
-      } else if (data) {
+        throw new Error(`Failed to save application to Supabase: ${error.message}`);
+      }
+      if (data) {
+        const apps2 = readLocalApps();
+        apps2.unshift(data);
+        writeLocalApps(apps2);
         return data;
       }
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
-      } else {
-        throw err;
+        markSupabaseHostUnreachable(err?.message);
+        const apps2 = readLocalApps();
+        apps2.unshift(newApp);
+        writeLocalApps(apps2);
+        return newApp;
       }
+      throw err;
     }
   }
   const apps = readLocalApps();
@@ -581,27 +569,25 @@ async function updateApplication(id, updates) {
   if (updates.status === "published" && !updates.published_at) {
     sanitizedUpdates.published_at = now;
   }
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().single();
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-        } else {
-          console.error("Supabase updateApplication error:", error);
-          throw new Error(`Failed to update application: ${error.message}`);
-        }
-      } else if (data) {
-        return data;
-      }
-    } catch (err) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
-      } else {
-        throw err;
-      }
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error("Supabase database client unavailable.");
     }
+    const { data, error } = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().maybeSingle();
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Supabase host unreachable: ${error.message}`);
+      }
+      console.error("Supabase updateApplication error:", error);
+      throw new Error(`Failed to update application in Supabase: ${error.message}`);
+    }
+    if (data) {
+      return data;
+    }
+    return { id, ...sanitizedUpdates };
   }
   const apps = readLocalApps();
   const index = apps.findIndex((a) => a.id === id);
@@ -616,27 +602,22 @@ async function updateApplication(id, updates) {
   return apps[index];
 }
 async function deleteApplication(id) {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from("applications").delete().eq("id", id).select().single();
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-        } else {
-          console.error("Supabase deleteApplication error:", error);
-          throw new Error(`Failed to delete application: ${error.message}`);
-        }
-      } else if (data) {
-        return data;
-      }
-    } catch (err) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err.message);
-      } else {
-        throw err;
-      }
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error("Supabase database client unavailable. Cannot delete record.");
     }
+    const { data, error } = await supabase.from("applications").delete().eq("id", id).select().maybeSingle();
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Supabase host unreachable: ${error.message}`);
+      }
+      console.error("Supabase deleteApplication error:", error);
+      throw new Error(`Failed to delete application from Supabase: ${error.message}`);
+    }
+    return data || { id };
   }
   const apps = readLocalApps();
   const index = apps.findIndex((a) => a.id === id);
@@ -1100,12 +1081,15 @@ async function requireAdmin(req, res, next) {
   req.adminUser = result;
   next();
 }
-app.get("/api/health", (req, res) => {
+app.get("/api/health", async (req, res) => {
+  const supabaseStatus = await verifySupabaseConnection();
   sendSuccess(res, {
-    status: "healthy",
+    status: supabaseStatus.connected ? "healthy" : supabaseStatus.configured ? "degraded" : "local",
     product: "WinterBuilds",
-    supabaseConnected: isSupabaseConnected(),
-    storageProvider: isSupabaseConnected() ? "supabase" : "local-resilient",
+    supabaseConnected: supabaseStatus.connected,
+    supabaseConfigured: supabaseStatus.configured,
+    supabaseError: supabaseStatus.error || null,
+    storageProvider: supabaseStatus.connected ? "supabase" : "local-resilient",
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
@@ -1124,7 +1108,7 @@ app.get("/api/apps", async (req, res) => {
     sendSuccess(res, result);
   } catch (err) {
     console.error("Error in GET /api/apps:", err);
-    sendError(res, 500, "SERVER_ERROR", "Unable to fetch applications catalog.");
+    sendError(res, 500, "SERVER_ERROR", err.message || "Unable to fetch applications catalog.");
   }
 });
 app.get("/api/apps/:slug", async (req, res) => {
@@ -1173,11 +1157,14 @@ app.get("/api/admin/status", async (req, res) => {
   const authHeader = req.headers.authorization;
   const result = await verifyAdminAuthorization(authHeader);
   const passwordConfigured = isAdminPasswordConfigured();
+  const supabaseStatus = await verifySupabaseConnection();
   sendSuccess(res, {
     authenticated: result.authorized,
     email: result.email || null,
     passwordConfigured,
-    supabaseConfigured: isSupabaseConnected(),
+    supabaseConfigured: supabaseStatus.configured,
+    supabaseConnected: supabaseStatus.connected,
+    supabaseError: supabaseStatus.error || null,
     defaultAdminEmail: "winterbuilds99@gmail.com"
   });
 });
@@ -1310,12 +1297,13 @@ app.post("/api/apps/:id/unpublish", requireAdmin, async (req, res) => {
 app.delete("/api/apps/:id", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    const appToDelete = await getApplicationById(id);
-    if (!appToDelete) {
-      return sendError(res, 404, "NOT_FOUND", "Application not found.");
+    let appToDelete = null;
+    try {
+      appToDelete = await getApplicationById(id);
+    } catch {
     }
     await deleteApplication(id);
-    if (appToDelete.apk_storage_path) {
+    if (appToDelete?.apk_storage_path) {
       deleteStorageObject(appToDelete.apk_storage_path).catch((err) => {
         console.warn("Storage cleanup warning:", err);
       });

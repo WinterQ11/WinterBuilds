@@ -4,7 +4,7 @@ import { api } from '../services/api';
 import { SearchBar } from '../components/apps/SearchBar';
 import { CategoryFilter } from '../components/apps/CategoryFilter';
 import { AppGrid } from '../components/apps/AppGrid';
-import { SlidersHorizontal, ArrowUpDown } from 'lucide-react';
+import { SlidersHorizontal, ArrowUpDown, AlertCircle } from 'lucide-react';
 
 interface AppsPageProps {
   onSelectApp: (app: Application) => void;
@@ -19,6 +19,7 @@ export const AppsPage: React.FC<AppsPageProps> = ({
 }) => {
   const [apps, setApps] = useState<Application[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
   const [sortBy, setSortBy] = useState<'latest' | 'downloads' | 'updated' | 'name'>('latest');
@@ -30,6 +31,7 @@ export const AppsPage: React.FC<AppsPageProps> = ({
 
   const loadApps = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.getApps({
         category: selectedCategory,
@@ -38,8 +40,9 @@ export const AppsPage: React.FC<AppsPageProps> = ({
         limit: 100,
       });
       setApps(res.applications);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Failed to load apps:', err);
+      setLoadError(err.message || 'Unable to load applications from database.');
     } finally {
       setIsLoading(false);
     }
@@ -120,6 +123,22 @@ export const AppsPage: React.FC<AppsPageProps> = ({
       <div className="text-xs font-mono text-[#807261] dark:text-[#827768]">
         Showing {filteredApps.length} {filteredApps.length === 1 ? 'application' : 'applications'}
       </div>
+
+      {/* Database Error Banner if query failed */}
+      {loadError && (
+        <div className="p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+            <span>{loadError}</span>
+          </div>
+          <button
+            onClick={loadApps}
+            className="px-3 py-1.5 rounded-xl font-bold bg-rose-600 text-white hover:bg-rose-700 transition-colors shrink-0"
+          >
+            Retry Database Query
+          </button>
+        </div>
+      )}
 
       {/* Applications Grid */}
       <AppGrid

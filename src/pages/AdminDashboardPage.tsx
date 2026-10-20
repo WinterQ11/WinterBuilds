@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { Application, DashboardStats } from '../types';
+import type { Application, DashboardStats, AdminStatusInfo } from '../types';
 import { api, setLocalAuthToken } from '../services/api';
 import { AdminSidebar, AdminTab } from '../components/admin/AdminSidebar';
 import { AdminStats } from '../components/admin/AdminStats';
@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface AdminDashboardPageProps {
@@ -37,16 +38,15 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
   });
   const [apps, setApps] = useState<Application[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [adminStatus, setAdminStatus] = useState<{
-    authenticated: boolean;
-    email: string | null;
-    supabaseConfigured: boolean;
-  }>({
+  const [adminStatus, setAdminStatus] = useState<AdminStatusInfo>({
     authenticated: true,
     email: 'winterbuilds99@gmail.com',
     supabaseConfigured: false,
+    supabaseConnected: false,
+    supabaseError: null,
   });
 
   // Modal for editing an app or replacing APK
@@ -61,6 +61,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
 
   const loadDashboardData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [statusRes, statsRes, appsRes] = await Promise.all([
         api.checkAdminStatus(),
@@ -70,8 +71,9 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
       setAdminStatus(statusRes);
       setStats(statsRes);
       setApps(appsRes.applications);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Dashboard load warning:', err);
+      setLoadError(err.message || 'Failed to connect to the applications database.');
     } finally {
       setIsLoading(false);
     }
@@ -87,7 +89,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
         draftApps: Math.max(0, prev.draftApps - 1),
       }));
     } catch (err: any) {
-      alert(err.message || 'Failed to publish');
+      alert(`Publish failed: ${err.message || 'Failed to publish'}`);
     }
   };
 
@@ -101,17 +103,30 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
         draftApps: prev.draftApps + 1,
       }));
     } catch (err: any) {
-      alert(err.message || 'Failed to unpublish');
+      alert(`Unpublish failed: ${err.message || 'Failed to unpublish'}`);
     }
   };
 
   const handleDelete = async (id: string) => {
-    await api.deleteApp(id);
-    setApps((prev) => prev.filter((a) => a.id !== id));
-    setStats((prev) => ({
-      ...prev,
-      totalApps: Math.max(0, prev.totalApps - 1),
-    }));
+    const target = apps.find(a => a.id === id);
+    const targetName = target?.name || 'this application';
+    if (!window.confirm(`Are you sure you want to permanently delete "${targetName}" from the database?`)) {
+      return;
+    }
+
+    try {
+      await api.deleteApp(id);
+      // Strictly update interface ONLY after the database operation succeeds
+      setApps((prev) => prev.filter((a) => a.id !== id));
+      setStats((prev) => ({
+        ...prev,
+        totalApps: Math.max(0, prev.totalApps - 1),
+        publishedApps: target?.status === 'published' ? Math.max(0, prev.publishedApps - 1) : prev.publishedApps,
+        draftApps: target?.status === 'draft' ? Math.max(0, prev.draftApps - 1) : prev.draftApps,
+      }));
+    } catch (err: any) {
+      alert(`Failed to delete application from database: ${err.message || 'Unknown database error'}`);
+    }
   };
 
   const handleSignOut = () => {
@@ -144,6 +159,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
         onSignOut={handleSignOut}
         adminEmail={adminStatus.email || 'winterbuilds99@gmail.com'}
         supabaseConfigured={adminStatus.supabaseConfigured}
+        supabaseConnected={adminStatus.supabaseConnected}
       />
 
       {/* Main Admin Content Area */}
@@ -182,6 +198,19 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Supabase Disconnected or Load Error Alert Banner */}
+        {((adminStatus.supabaseConfigured && !adminStatus.supabaseConnected) || loadError) && (
+          <div className="p-4 rounded-2xl border flex items-start gap-3 bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs">
+              <p className="font-bold">Database Connection Warning</p>
+              <p className="text-[#6c5e4f] dark:text-[#c4b8a8]">
+                {loadError || adminStatus.supabaseError || 'Cannot communicate with Supabase. If your project is on the Free tier, it may be paused due to inactivity. Go to your Supabase Dashboard and click "Restore Project" to restore database connectivity.'}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* ------------------------------------------------------------- */}
         {/* TAB: OVERVIEW */}

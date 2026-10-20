@@ -85,6 +85,11 @@ let supabaseHostReachable: boolean = true;
 let lastReachabilityCheck: number = 0;
 const RETRY_INTERVAL_MS = 60000; // Retry once per minute if unreachable
 
+let lastVerifiedConnected: boolean | null = null;
+let lastVerifiedError: string | null = null;
+let lastVerifiedTime: number = 0;
+const VERIFY_CACHE_TTL_MS = 15000; // Cache connection verification for 15 seconds
+
 /**
  * Determines whether an error is caused by DNS resolution failure, network timeout,
  * or host unreachability (e.g. paused/deleted/invalid Supabase project).
@@ -105,15 +110,13 @@ export function isDnsOrNetworkError(err: any): boolean {
 }
 
 /**
- * Marks the Supabase host as unreachable so subsequent operations fail fast
- * and use resilient local storage without spamming the console.
+ * Marks the Supabase host as unreachable so subsequent operations fail fast.
  */
 export function markSupabaseHostUnreachable(errorReason?: string): void {
-  if (supabaseHostReachable) {
-    supabaseHostReachable = false;
-    lastReachabilityCheck = Date.now();
-    console.warn(`[WinterBuilds Storage] Supabase host is currently unreachable (${errorReason || 'network/DNS error'}). Falling back to resilient local storage mode.`);
-  }
+  supabaseHostReachable = false;
+  lastVerifiedConnected = false;
+  lastVerifiedError = errorReason || 'Host unreachable';
+  lastReachabilityCheck = Date.now();
 }
 
 /**
@@ -121,6 +124,8 @@ export function markSupabaseHostUnreachable(errorReason?: string): void {
  */
 export function markSupabaseHostReachable(): void {
   supabaseHostReachable = true;
+  lastVerifiedConnected = true;
+  lastVerifiedError = null;
 }
 
 /**
@@ -134,10 +139,93 @@ export function isSupabaseConfigured(): boolean {
 }
 
 /**
- * Returns true if Supabase host is currently operational.
+ * Returns true if Supabase host is currently verified operational.
  */
 export function isSupabaseConnected(): boolean {
-  return isSupabaseConfigured() && supabaseHostReachable;
+  if (!isSupabaseConfigured()) return false;
+  return lastVerifiedConnected === true && supabaseHostReachable;
+}
+
+/**
+ * Actively checks and verifies Supabase connectivity against the applications table.
+ * Returns true if the database responds, or false with the specific error.
+ */
+export async function verifySupabaseConnection(): Promise<{
+  connected: boolean;
+  configured: boolean;
+  url: string;
+  error?: string | null;
+}> {
+  if (!isSupabaseConfigured()) {
+    return {
+      connected: false,
+      configured: false,
+      url: '',
+      error: 'Supabase credentials are not configured in environment variables.',
+    };
+  }
+
+  if (lastVerifiedTime > 0 && Date.now() - lastVerifiedTime < VERIFY_CACHE_TTL_MS && lastVerifiedConnected !== null) {
+    return {
+      connected: lastVerifiedConnected,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: lastVerifiedError,
+    };
+  }
+
+  const client = getServerSupabaseClient();
+  if (!client) {
+    lastVerifiedConnected = false;
+    lastVerifiedError = 'Failed to initialize Supabase client with provided credentials.';
+    lastVerifiedTime = Date.now();
+    return {
+      connected: false,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: lastVerifiedError,
+    };
+  }
+
+  try {
+    const { error } = await client.from('applications').select('id').limit(1);
+    lastVerifiedTime = Date.now();
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        return {
+          connected: false,
+          configured: true,
+          url: getSupabaseUrl(),
+          error: `Supabase host unreachable (${error.message}). If using the Free tier, please verify in the Supabase Dashboard that your project is not paused.`,
+        };
+      }
+      lastVerifiedConnected = false;
+      lastVerifiedError = `Supabase database error: ${error.message}`;
+      return {
+        connected: false,
+        configured: true,
+        url: getSupabaseUrl(),
+        error: lastVerifiedError,
+      };
+    }
+    markSupabaseHostReachable();
+    return {
+      connected: true,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: null,
+    };
+  } catch (err: any) {
+    lastVerifiedTime = Date.now();
+    markSupabaseHostUnreachable(err?.message);
+    return {
+      connected: false,
+      configured: true,
+      url: getSupabaseUrl(),
+      error: `Supabase connection failed: ${err?.message || 'Network failure'}`,
+    };
+  }
 }
 
 /**

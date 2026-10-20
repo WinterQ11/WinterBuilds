@@ -103,3 +103,14 @@ export interface DashboardStats {
   recentlyAdded: Application[];
   recentlyUpdated: Application[];
 }
+
+export interface AdminStatusInfo {
+  authenticated: boolean;
+  email: string | null;
+  passwordConfigured?: boolean;
+  supabaseConfigured: boolean;
+  supabaseConnected: boolean;
+  supabaseError?: string | null;
+  defaultAdminEmail?: string;
+}
+

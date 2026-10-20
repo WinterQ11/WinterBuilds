@@ -1,4 +1,4 @@
-import type { Application, ApiResponse, DashboardStats } from '../types';
+import type { Application, ApiResponse, DashboardStats, AdminStatusInfo } from '../types';
 import { getSupabaseClient } from '../lib/supabase';
 
 // Base URL: in production and Vercel, uses same-origin '/api'
@@ -157,23 +157,18 @@ export const api = {
   },
 
   // Admin APIs
-  async checkAdminStatus(): Promise<{
-    authenticated: boolean;
-    email: string | null;
-    passwordConfigured?: boolean;
-    supabaseConfigured: boolean;
-    defaultAdminEmail?: string;
-  }> {
+  async checkAdminStatus(): Promise<AdminStatusInfo> {
     try {
-      return await safeFetch<{
-        authenticated: boolean;
-        email: string | null;
-        passwordConfigured?: boolean;
-        supabaseConfigured: boolean;
-        defaultAdminEmail?: string;
-      }>('/admin/status');
+      return await safeFetch<AdminStatusInfo>('/admin/status');
     } catch {
-      return { authenticated: false, email: null, passwordConfigured: false, supabaseConfigured: false };
+      return {
+        authenticated: false,
+        email: null,
+        passwordConfigured: false,
+        supabaseConfigured: false,
+        supabaseConnected: false,
+        supabaseError: null,
+      };
     }
   },
 

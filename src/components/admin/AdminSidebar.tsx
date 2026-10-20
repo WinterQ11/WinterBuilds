@@ -19,6 +19,7 @@ interface AdminSidebarProps {
   onSignOut: () => void;
   adminEmail?: string | null;
   supabaseConfigured: boolean;
+  supabaseConnected?: boolean;
 }
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({
@@ -28,6 +29,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   onSignOut,
   adminEmail,
   supabaseConfigured,
+  supabaseConnected,
 }) => {
   const navItems = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -85,10 +87,24 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
               Database
             </span>
             <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${
-              supabaseConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+              supabaseConnected
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : supabaseConfigured
+                ? 'text-rose-600 dark:text-rose-400'
+                : 'text-amber-600 dark:text-amber-400'
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${supabaseConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-              {supabaseConfigured ? 'Supabase Live' : 'Local Store'}
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                supabaseConnected
+                  ? 'bg-emerald-500'
+                  : supabaseConfigured
+                  ? 'bg-rose-500 animate-pulse'
+                  : 'bg-amber-500'
+              }`} />
+              {supabaseConnected
+                ? 'Supabase Live'
+                : supabaseConfigured
+                ? 'Supabase Paused'
+                : 'Local Store'}
             </span>
           </div>
           {adminEmail && (

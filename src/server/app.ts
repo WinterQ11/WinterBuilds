@@ -25,8 +25,9 @@ import {
   createAdminSessionToken,
   isAllowedAdminEmail,
 } from './services/auth';
+import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient, verifySupabaseConnection } from '../lib/supabase';
 import { generateAppEnhancements } from '../lib/gemini';
-import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient } from '../lib/supabase';
+import type { Application } from '../types';
 import path from 'path';
 import fs from 'fs';
 
@@ -86,12 +87,15 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // -----------------------------------------------------------------------------
 
 // Health check and environment status
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  const supabaseStatus = await verifySupabaseConnection();
   sendSuccess(res, {
-    status: 'healthy',
+    status: supabaseStatus.connected ? 'healthy' : (supabaseStatus.configured ? 'degraded' : 'local'),
     product: 'WinterBuilds',
-    supabaseConnected: isSupabaseConnected(),
-    storageProvider: isSupabaseConnected() ? 'supabase' : 'local-resilient',
+    supabaseConnected: supabaseStatus.connected,
+    supabaseConfigured: supabaseStatus.configured,
+    supabaseError: supabaseStatus.error || null,
+    storageProvider: supabaseStatus.connected ? 'supabase' : 'local-resilient',
     timestamp: new Date().toISOString(),
   });
 });
@@ -114,7 +118,7 @@ app.get('/api/apps', async (req, res) => {
     sendSuccess(res, result);
   } catch (err: any) {
     console.error('Error in GET /api/apps:', err);
-    sendError(res, 500, 'SERVER_ERROR', 'Unable to fetch applications catalog.');
+    sendError(res, 500, 'SERVER_ERROR', err.message || 'Unable to fetch applications catalog.');
   }
 });
 
@@ -183,12 +187,15 @@ app.get('/api/admin/status', async (req, res) => {
   const authHeader = req.headers.authorization;
   const result = await verifyAdminAuthorization(authHeader);
   const passwordConfigured = isAdminPasswordConfigured();
+  const supabaseStatus = await verifySupabaseConnection();
 
   sendSuccess(res, {
     authenticated: result.authorized,
     email: result.email || null,
     passwordConfigured,
-    supabaseConfigured: isSupabaseConnected(),
+    supabaseConfigured: supabaseStatus.configured,
+    supabaseConnected: supabaseStatus.connected,
+    supabaseError: supabaseStatus.error || null,
     defaultAdminEmail: 'winterbuilds99@gmail.com',
   });
 });
@@ -350,17 +357,18 @@ app.post('/api/apps/:id/unpublish', requireAdmin, async (req, res) => {
 app.delete('/api/apps/:id', requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    const appToDelete = await getApplicationById(id);
-
-    if (!appToDelete) {
-      return sendError(res, 404, 'NOT_FOUND', 'Application not found.');
+    let appToDelete: Application | null = null;
+    try {
+      appToDelete = await getApplicationById(id);
+    } catch {
+      // Non-blocking metadata lookup
     }
 
     // 1. Delete database record
     await deleteApplication(id);
 
     // 2. Clean up storage object (non-blocking)
-    if (appToDelete.apk_storage_path) {
+    if (appToDelete?.apk_storage_path) {
       deleteStorageObject(appToDelete.apk_storage_path).catch(err => {
         console.warn('Storage cleanup warning:', err);
       });
