@@ -294,7 +294,7 @@ app.post('/api/apps', requireAdmin, async (req, res) => {
       return sendError(res, 400, 'VALIDATION_ERROR', 'Please provide either a valid Google Drive APK URL or an uploaded APK file.');
     }
 
-    const apkStoragePath = body.apk_storage_path || (gDriveUrl ? 'google_drive' : '');
+    const apkStoragePath = body.apk_storage_path || (gDriveUrl ? 'google_drive' : 'direct_url');
     const apkDownloadUrl = gDriveUrl || (body.apk_download_url ? formatCleanDownloadUrl(body.apk_download_url, apkStoragePath, body.name) : '');
 
     const created = await createApplication({

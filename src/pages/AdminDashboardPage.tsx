@@ -70,7 +70,12 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
       ]);
       setAdminStatus(statusRes);
       setStats(statsRes);
-      setApps(appsRes.applications);
+      setApps((prev) => {
+        const remoteApps = appsRes.applications || [];
+        const remoteIds = new Set(remoteApps.map((a) => a.id));
+        const pendingLocal = prev.filter((a) => !remoteIds.has(a.id));
+        return [...pendingLocal, ...remoteApps];
+      });
     } catch (err: any) {
       console.warn('Dashboard load warning:', err);
       setLoadError(err.message || 'Failed to connect to the applications database.');

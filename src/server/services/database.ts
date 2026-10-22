@@ -7,6 +7,7 @@ import {
   isSupabaseConfigured,
 } from '../../lib/supabase';
 import { verifyAdminSessionToken, verifyAdminPassword } from './auth';
+import { isValidGoogleDriveUrl } from '../../lib/drive';
 import type { Application, AppStatus, AppCategory, DashboardStats } from '../../types';
 
 function getDataDir(): string {
@@ -108,13 +109,31 @@ export interface ListAppsOptions {
   sort?: 'popular' | 'latest' | 'updated' | 'name';
 }
 
+function normalizeApplication(row: any): Application {
+  if (!row) return row;
+  const isDrive = Boolean(
+    row.google_drive_url ||
+    row.apk_storage_path === 'google_drive' ||
+    (row.apk_download_url && isValidGoogleDriveUrl(row.apk_download_url))
+  );
+  const gDriveUrl = row.google_drive_url || (isDrive && isValidGoogleDriveUrl(row.apk_download_url) ? row.apk_download_url : null);
+  return {
+    ...row,
+    google_drive_url: gDriveUrl,
+    apk_storage_path: row.apk_storage_path || (isDrive ? 'google_drive' : 'placeholder'),
+    apk_download_url: row.apk_download_url || gDriveUrl || '',
+    published_at: row.published_at || (row.status === 'published' ? row.created_at : null),
+  } as Application;
+}
+
 export async function listApplications(options: ListAppsOptions = {}): Promise<{
   applications: Application[];
   total: number;
 }> {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       let query = supabase.from('applications').select('*', { count: 'exact' });
 
@@ -149,7 +168,7 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
           break;
         case 'latest':
         default:
-          query = query.order('published_at', { ascending: false, nullsFirst: false });
+          query = query.order('created_at', { ascending: false });
           break;
       }
 
@@ -166,9 +185,11 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
         throw new Error(`Database query failed: ${error.message}`);
       }
 
+      const normalizedApps = (data || []).map(normalizeApplication);
+
       return {
-        applications: (data || []) as Application[],
-        total: count !== null ? count : (data?.length || 0),
+        applications: normalizedApps,
+        total: count !== null ? count : normalizedApps.length,
       };
     } catch (err: any) {
       if (isDnsOrNetworkError(err)) {
@@ -187,7 +208,7 @@ function getFallbackLocalApplications(options: ListAppsOptions = {}): {
   applications: Application[];
   total: number;
 } {
-  let apps = readLocalApps();
+  let apps = readLocalApps().map(normalizeApplication);
 
   if (options.status && options.status !== 'all') {
     apps = apps.filter(a => a.status === options.status);
@@ -226,11 +247,7 @@ function getFallbackLocalApplications(options: ListAppsOptions = {}): {
       break;
     case 'latest':
     default:
-      apps.sort((a, b) => {
-        const da = a.published_at ? new Date(a.published_at).getTime() : 0;
-        const db = b.published_at ? new Date(b.published_at).getTime() : 0;
-        return db - da;
-      });
+      apps.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       break;
   }
 
@@ -243,9 +260,10 @@ function getFallbackLocalApplications(options: ListAppsOptions = {}): {
 }
 
 export async function getApplicationBySlug(slug: string): Promise<Application | null> {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       const { data, error } = await supabase
         .from('applications')
@@ -260,7 +278,7 @@ export async function getApplicationBySlug(slug: string): Promise<Application | 
           throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
-        return (data as Application);
+        return normalizeApplication(data);
       }
     } catch (err: any) {
       if (isDnsOrNetworkError(err)) {
@@ -271,14 +289,15 @@ export async function getApplicationBySlug(slug: string): Promise<Application | 
     }
   }
 
-  const apps = readLocalApps();
+  const apps = readLocalApps().map(normalizeApplication);
   return apps.find(a => a.slug === slug || a.id === slug) || null;
 }
 
 export async function getApplicationById(id: string): Promise<Application | null> {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       const { data, error } = await supabase
         .from('applications')
@@ -293,7 +312,7 @@ export async function getApplicationById(id: string): Promise<Application | null
           throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
-        return (data as Application);
+        return normalizeApplication(data);
       }
     } catch (err: any) {
       if (isDnsOrNetworkError(err)) {
@@ -304,62 +323,78 @@ export async function getApplicationById(id: string): Promise<Application | null
     }
   }
 
-  const apps = readLocalApps();
+  const apps = readLocalApps().map(normalizeApplication);
   return apps.find(a => a.id === id) || null;
 }
 
 export async function createApplication(appData: Omit<Application, 'id' | 'created_at' | 'updated_at'>): Promise<Application> {
+  const isConfigured = isSupabaseConfigured();
+  const supabase = getServerSupabaseClient();
+
   const now = new Date().toISOString();
   const id = (await import('crypto')).randomUUID();
+  const isPublished = appData.status === 'published';
+  const publishedAt = isPublished ? (appData.published_at || now) : null;
+
+  const gDriveUrl = appData.google_drive_url ? String(appData.google_drive_url).trim() : null;
+  const apkStoragePath = appData.apk_storage_path || (gDriveUrl ? 'google_drive' : 'placeholder');
+  const apkDownloadUrl = appData.apk_download_url || gDriveUrl || '';
+
   const newApp: Application = {
     ...appData,
     id,
+    apk_storage_path: apkStoragePath,
+    apk_download_url: apkDownloadUrl,
+    google_drive_url: gDriveUrl,
+    status: appData.status || 'draft',
     created_at: now,
     updated_at: now,
-    published_at: appData.status === 'published' ? now : null,
+    published_at: publishedAt,
   };
 
-  const supabase = getServerSupabaseClient();
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error('Supabase database client could not be initialized with configured environment keys.');
+    }
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
+    // Attempt direct commit to Supabase applications table
+    let { data, error } = await supabase
+      .from('applications')
+      .insert([newApp])
+      .select()
+      .maybeSingle();
+
+    // If column google_drive_url does not exist yet in user's Supabase schema, retry without it
+    // Note: apk_download_url already safely stores the Google Drive link and apk_storage_path is 'google_drive'
+    if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
+      const { google_drive_url, ...legacyApp } = newApp;
+      const retryRes = await supabase
         .from('applications')
-        .insert([newApp])
+        .insert([legacyApp])
         .select()
         .maybeSingle();
-
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-          // Persist to local store so application is preserved
-          const apps = readLocalApps();
-          apps.unshift(newApp);
-          writeLocalApps(apps);
-          return newApp;
-        }
-        throw new Error(`Failed to save application to Supabase: ${error.message}`);
-      }
-
-      if (data) {
-        const apps = readLocalApps();
-        apps.unshift(data as Application);
-        writeLocalApps(apps);
-        return data as Application;
-      }
-    } catch (err: any) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err?.message);
-        const apps = readLocalApps();
-        apps.unshift(newApp);
-        writeLocalApps(apps);
-        return newApp;
-      }
-      throw err;
+      data = retryRes.data;
+      error = retryRes.error;
     }
+
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active and not paused.`);
+      }
+      throw new Error(`Database error saving application to Supabase: ${error.message}`);
+    }
+
+    const saved = normalizeApplication(data || newApp);
+
+    // Keep local cache synchronized
+    const apps = readLocalApps();
+    apps.unshift(saved);
+    writeLocalApps(apps);
+    return saved;
   }
 
-  // Pure offline development or host unreachable
+  // Pure offline development (when Supabase credentials are not provided)
   const apps = readLocalApps();
   apps.unshift(newApp);
   writeLocalApps(apps);
@@ -373,69 +408,63 @@ export async function updateApplication(id: string, updates: Partial<Application
     updated_at: now,
   };
 
-  if (updates.status === 'published' && !updates.published_at) {
-    sanitizedUpdates.published_at = now;
+  if (updates.status === 'published') {
+    sanitizedUpdates.published_at = updates.published_at || now;
   }
 
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error('Supabase database client could not be initialized with configured environment keys.');
+    }
+
+    let { data, error } = await supabase
+      .from('applications')
+      .update(sanitizedUpdates)
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+
+    if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
+      const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
+      const retryRes = await supabase
         .from('applications')
-        .update(sanitizedUpdates)
+        .update(legacyUpdates)
         .eq('id', id)
         .select()
         .maybeSingle();
-
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-          const apps = readLocalApps();
-          const index = apps.findIndex(a => a.id === id);
-          if (index !== -1) {
-            apps[index] = { ...apps[index], ...sanitizedUpdates };
-            writeLocalApps(apps);
-            return apps[index];
-          }
-          return { id, ...sanitizedUpdates } as Application;
-        }
-        console.error('Supabase updateApplication error:', error);
-        throw new Error(`Failed to update application in Supabase: ${error.message}`);
-      }
-
-      if (data) {
-        const apps = readLocalApps();
-        const index = apps.findIndex(a => a.id === id);
-        if (index !== -1) {
-          apps[index] = data as Application;
-        } else {
-          apps.unshift(data as Application);
-        }
-        writeLocalApps(apps);
-        return data as Application;
-      }
-    } catch (err: any) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err?.message);
-        const apps = readLocalApps();
-        const index = apps.findIndex(a => a.id === id);
-        if (index !== -1) {
-          apps[index] = { ...apps[index], ...sanitizedUpdates };
-          writeLocalApps(apps);
-          return apps[index];
-        }
-        return { id, ...sanitizedUpdates } as Application;
-      }
-      throw err;
+      data = retryRes.data;
+      error = retryRes.error;
     }
+
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active.`);
+      }
+      throw new Error(`Database error updating application in Supabase: ${error.message}`);
+    }
+
+    const updated = normalizeApplication(data || { id, ...sanitizedUpdates });
+
+    const apps = readLocalApps();
+    const index = apps.findIndex(a => a.id === id);
+    if (index !== -1) {
+      apps[index] = { ...apps[index], ...updated };
+    } else {
+      apps.unshift(updated);
+    }
+    writeLocalApps(apps);
+    return updated;
   }
 
-  // Resilient fallback when offline or Supabase host is unreachable
+  // Pure offline fallback
   const apps = readLocalApps();
   const index = apps.findIndex(a => a.id === id);
   if (index === -1) {
-    return { id, ...sanitizedUpdates } as Application;
+    throw new Error(`Application with ID "${id}" was not found.`);
   }
 
   apps[index] = {
@@ -443,67 +472,47 @@ export async function updateApplication(id: string, updates: Partial<Application
     ...sanitizedUpdates,
   };
   writeLocalApps(apps);
-  return apps[index];
+  return normalizeApplication(apps[index]);
 }
 
 export async function deleteApplication(id: string): Promise<Application> {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('applications')
-        .delete()
-        .eq('id', id)
-        .select()
-        .maybeSingle();
-
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-          const apps = readLocalApps();
-          const index = apps.findIndex(a => a.id === id);
-          if (index !== -1) {
-            const [removed] = apps.splice(index, 1);
-            writeLocalApps(apps);
-            return removed;
-          }
-          return { id } as Application;
-        }
-        console.error('Supabase deleteApplication error:', error);
-        throw new Error(`Failed to delete application from Supabase: ${error.message}`);
-      }
-
-      if (data) {
-        const apps = readLocalApps();
-        const index = apps.findIndex(a => a.id === id);
-        if (index !== -1) {
-          apps.splice(index, 1);
-          writeLocalApps(apps);
-        }
-        return data as Application;
-      }
-    } catch (err: any) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err?.message);
-        const apps = readLocalApps();
-        const index = apps.findIndex(a => a.id === id);
-        if (index !== -1) {
-          const [removed] = apps.splice(index, 1);
-          writeLocalApps(apps);
-          return removed;
-        }
-        return { id } as Application;
-      }
-      throw err;
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error('Supabase database client unavailable.');
     }
+
+    const { data, error } = await supabase
+      .from('applications')
+      .delete()
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}).`);
+      }
+      throw new Error(`Database error deleting application from Supabase: ${error.message}`);
+    }
+
+    const apps = readLocalApps();
+    const index = apps.findIndex(a => a.id === id);
+    if (index !== -1) {
+      const [removed] = apps.splice(index, 1);
+      writeLocalApps(apps);
+      return data || removed;
+    }
+    return data || ({ id } as Application);
   }
 
-  // Resilient fallback when offline or Supabase host is unreachable
   const apps = readLocalApps();
   const index = apps.findIndex(a => a.id === id);
   if (index === -1) {
-    return { id } as Application;
+    throw new Error(`Application with ID "${id}" was not found.`);
   }
   const [removed] = apps.splice(index, 1);
   writeLocalApps(apps);

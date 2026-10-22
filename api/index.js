@@ -273,6 +273,28 @@ function verifyAdminSessionToken(token) {
   }
 }
 
+// src/lib/drive.ts
+function isValidGoogleDriveUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "drive.google.com" && host !== "docs.google.com") {
+      return false;
+    }
+    const pathname = parsed.pathname;
+    const hasFileD = /\/file\/d\/[a-zA-Z0-9_-]+/i.test(pathname);
+    const hasIdParam = Boolean(parsed.searchParams.get("id"));
+    const hasFolder = /\/drive\/(?:u\/\d+\/)?folders\/[a-zA-Z0-9_-]+/i.test(pathname);
+    const hasUc = /\/uc/i.test(pathname) && Boolean(parsed.searchParams.get("id"));
+    return hasFileD || hasIdParam || hasFolder || hasUc || pathname.length > 5 && /[a-zA-Z0-9_-]{15,}/.test(trimmed);
+  } catch {
+    return false;
+  }
+}
+
 // src/server/services/database.ts
 function getDataDir() {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -360,9 +382,24 @@ function writeLocalApps(apps) {
   } catch {
   }
 }
+function normalizeApplication(row) {
+  if (!row) return row;
+  const isDrive = Boolean(
+    row.google_drive_url || row.apk_storage_path === "google_drive" || row.apk_download_url && isValidGoogleDriveUrl(row.apk_download_url)
+  );
+  const gDriveUrl = row.google_drive_url || (isDrive && isValidGoogleDriveUrl(row.apk_download_url) ? row.apk_download_url : null);
+  return {
+    ...row,
+    google_drive_url: gDriveUrl,
+    apk_storage_path: row.apk_storage_path || (isDrive ? "google_drive" : "placeholder"),
+    apk_download_url: row.apk_download_url || gDriveUrl || "",
+    published_at: row.published_at || (row.status === "published" ? row.created_at : null)
+  };
+}
 async function listApplications(options = {}) {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       let query = supabase.from("applications").select("*", { count: "exact" });
       if (options.status && options.status !== "all") {
@@ -392,7 +429,7 @@ async function listApplications(options = {}) {
           break;
         case "latest":
         default:
-          query = query.order("published_at", { ascending: false, nullsFirst: false });
+          query = query.order("created_at", { ascending: false });
           break;
       }
       const limit = options.limit || 50;
@@ -406,9 +443,10 @@ async function listApplications(options = {}) {
         }
         throw new Error(`Database query failed: ${error.message}`);
       }
+      const normalizedApps = (data || []).map(normalizeApplication);
       return {
-        applications: data || [],
-        total: count !== null ? count : data?.length || 0
+        applications: normalizedApps,
+        total: count !== null ? count : normalizedApps.length
       };
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
@@ -421,7 +459,7 @@ async function listApplications(options = {}) {
   return getFallbackLocalApplications(options);
 }
 function getFallbackLocalApplications(options = {}) {
-  let apps = readLocalApps();
+  let apps = readLocalApps().map(normalizeApplication);
   if (options.status && options.status !== "all") {
     apps = apps.filter((a) => a.status === options.status);
   } else if (!options.status) {
@@ -451,11 +489,7 @@ function getFallbackLocalApplications(options = {}) {
       break;
     case "latest":
     default:
-      apps.sort((a, b) => {
-        const da = a.published_at ? new Date(a.published_at).getTime() : 0;
-        const db = b.published_at ? new Date(b.published_at).getTime() : 0;
-        return db - da;
-      });
+      apps.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       break;
   }
   const total = apps.length;
@@ -465,8 +499,9 @@ function getFallbackLocalApplications(options = {}) {
   return { applications: paginated, total };
 }
 async function getApplicationBySlug(slug) {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       const { data, error } = await supabase.from("applications").select("*").eq("slug", slug).maybeSingle();
       if (error) {
@@ -476,7 +511,7 @@ async function getApplicationBySlug(slug) {
           throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
-        return data;
+        return normalizeApplication(data);
       }
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
@@ -486,12 +521,13 @@ async function getApplicationBySlug(slug) {
       }
     }
   }
-  const apps = readLocalApps();
+  const apps = readLocalApps().map(normalizeApplication);
   return apps.find((a) => a.slug === slug || a.id === slug) || null;
 }
 async function getApplicationById(id) {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
+  if (isConfigured && supabase) {
     try {
       const { data, error } = await supabase.from("applications").select("*").eq("id", id).maybeSingle();
       if (error) {
@@ -501,7 +537,7 @@ async function getApplicationById(id) {
           throw new Error(`Failed to retrieve application: ${error.message}`);
         }
       } else if (data) {
-        return data;
+        return normalizeApplication(data);
       }
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
@@ -511,49 +547,53 @@ async function getApplicationById(id) {
       }
     }
   }
-  const apps = readLocalApps();
+  const apps = readLocalApps().map(normalizeApplication);
   return apps.find((a) => a.id === id) || null;
 }
 async function createApplication(appData) {
+  const isConfigured = isSupabaseConfigured();
+  const supabase = getServerSupabaseClient();
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const id = (await import("crypto")).randomUUID();
+  const isPublished = appData.status === "published";
+  const publishedAt = isPublished ? appData.published_at || now : null;
+  const gDriveUrl = appData.google_drive_url ? String(appData.google_drive_url).trim() : null;
+  const apkStoragePath = appData.apk_storage_path || (gDriveUrl ? "google_drive" : "placeholder");
+  const apkDownloadUrl = appData.apk_download_url || gDriveUrl || "";
   const newApp = {
     ...appData,
     id,
+    apk_storage_path: apkStoragePath,
+    apk_download_url: apkDownloadUrl,
+    google_drive_url: gDriveUrl,
+    status: appData.status || "draft",
     created_at: now,
     updated_at: now,
-    published_at: appData.status === "published" ? now : null
+    published_at: publishedAt
   };
-  const supabase = getServerSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from("applications").insert([newApp]).select().maybeSingle();
-      if (error) {
-        if (isDnsOrNetworkError(error)) {
-          markSupabaseHostUnreachable(error.message);
-          const apps2 = readLocalApps();
-          apps2.unshift(newApp);
-          writeLocalApps(apps2);
-          return newApp;
-        }
-        throw new Error(`Failed to save application to Supabase: ${error.message}`);
-      }
-      if (data) {
-        const apps2 = readLocalApps();
-        apps2.unshift(data);
-        writeLocalApps(apps2);
-        return data;
-      }
-    } catch (err) {
-      if (isDnsOrNetworkError(err)) {
-        markSupabaseHostUnreachable(err?.message);
-        const apps2 = readLocalApps();
-        apps2.unshift(newApp);
-        writeLocalApps(apps2);
-        return newApp;
-      }
-      throw err;
+  if (isConfigured) {
+    if (!supabase) {
+      throw new Error("Supabase database client could not be initialized with configured environment keys.");
     }
+    let { data, error } = await supabase.from("applications").insert([newApp]).select().maybeSingle();
+    if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
+      const { google_drive_url, ...legacyApp } = newApp;
+      const retryRes = await supabase.from("applications").insert([legacyApp]).select().maybeSingle();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+    if (error) {
+      if (isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active and not paused.`);
+      }
+      throw new Error(`Database error saving application to Supabase: ${error.message}`);
+    }
+    const saved = normalizeApplication(data || newApp);
+    const apps2 = readLocalApps();
+    apps2.unshift(saved);
+    writeLocalApps(apps2);
+    return saved;
   }
   const apps = readLocalApps();
   apps.unshift(newApp);
@@ -566,63 +606,80 @@ async function updateApplication(id, updates) {
     ...updates,
     updated_at: now
   };
-  if (updates.status === "published" && !updates.published_at) {
-    sanitizedUpdates.published_at = now;
+  if (updates.status === "published") {
+    sanitizedUpdates.published_at = updates.published_at || now;
   }
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
   if (isConfigured) {
     if (!supabase) {
-      throw new Error("Supabase database client unavailable.");
+      throw new Error("Supabase database client could not be initialized with configured environment keys.");
     }
-    const { data, error } = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().maybeSingle();
+    let { data, error } = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().maybeSingle();
+    if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
+      const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
+      const retryRes = await supabase.from("applications").update(legacyUpdates).eq("id", id).select().maybeSingle();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Supabase host unreachable: ${error.message}`);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active.`);
       }
-      console.error("Supabase updateApplication error:", error);
-      throw new Error(`Failed to update application in Supabase: ${error.message}`);
+      throw new Error(`Database error updating application in Supabase: ${error.message}`);
     }
-    if (data) {
-      return data;
+    const updated = normalizeApplication(data || { id, ...sanitizedUpdates });
+    const apps2 = readLocalApps();
+    const index2 = apps2.findIndex((a) => a.id === id);
+    if (index2 !== -1) {
+      apps2[index2] = { ...apps2[index2], ...updated };
+    } else {
+      apps2.unshift(updated);
     }
-    return { id, ...sanitizedUpdates };
+    writeLocalApps(apps2);
+    return updated;
   }
   const apps = readLocalApps();
   const index = apps.findIndex((a) => a.id === id);
   if (index === -1) {
-    throw new Error("Application not found");
+    throw new Error(`Application with ID "${id}" was not found.`);
   }
   apps[index] = {
     ...apps[index],
     ...sanitizedUpdates
   };
   writeLocalApps(apps);
-  return apps[index];
+  return normalizeApplication(apps[index]);
 }
 async function deleteApplication(id) {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
   if (isConfigured) {
     if (!supabase) {
-      throw new Error("Supabase database client unavailable. Cannot delete record.");
+      throw new Error("Supabase database client unavailable.");
     }
     const { data, error } = await supabase.from("applications").delete().eq("id", id).select().maybeSingle();
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Supabase host unreachable: ${error.message}`);
+        throw new Error(`Cannot connect to Supabase database host (${error.message}).`);
       }
-      console.error("Supabase deleteApplication error:", error);
-      throw new Error(`Failed to delete application from Supabase: ${error.message}`);
+      throw new Error(`Database error deleting application from Supabase: ${error.message}`);
+    }
+    const apps2 = readLocalApps();
+    const index2 = apps2.findIndex((a) => a.id === id);
+    if (index2 !== -1) {
+      const [removed2] = apps2.splice(index2, 1);
+      writeLocalApps(apps2);
+      return data || removed2;
     }
     return data || { id };
   }
   const apps = readLocalApps();
   const index = apps.findIndex((a) => a.id === id);
   if (index === -1) {
-    throw new Error("Application not found");
+    throw new Error(`Application with ID "${id}" was not found.`);
   }
   const [removed] = apps.splice(index, 1);
   writeLocalApps(apps);
@@ -911,19 +968,13 @@ async function createUploadAuthorization(params) {
       }
     }
   }
-  const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-  if (isVercel && params.fileSize && params.fileSize > 4.5 * 1024 * 1024) {
-    const sizeMb = (params.fileSize / (1024 * 1024)).toFixed(1);
-    throw new Error(
-      `Direct upload of ${sizeMb} MB APK requires Supabase Storage in production. Vercel serverless functions strictly reject payloads exceeding 4.5 MB. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel Project Environment Variables to enable direct-to-storage uploads of at least 100 MB.`
-    );
-  }
   const uploadToken = createAdminSessionToken("winterbuilds99@gmail.com");
+  const useChunked = Boolean(params.fileSize && params.fileSize > 4 * 1024 * 1024);
   return {
-    uploadUrl: `/api/upload/direct?path=${encodeURIComponent(storagePath)}&original=${encodeURIComponent(originalFileName)}&token=${encodeURIComponent(uploadToken)}`,
+    uploadUrl: useChunked ? "/api/upload/chunk" : `/api/upload/direct?path=${encodeURIComponent(storagePath)}&original=${encodeURIComponent(originalFileName)}&token=${encodeURIComponent(uploadToken)}`,
     path: storagePath,
     method: "POST",
-    provider: "direct",
+    provider: useChunked ? "chunked" : "direct",
     token: uploadToken,
     originalFileName,
     headers: {
@@ -1132,13 +1183,18 @@ app.post("/api/apps/:id/download", async (req, res) => {
       return sendError(res, 404, "APP_NOT_FOUND", "Application not found for download.");
     }
     const newCount = await incrementDownloadCount(id);
-    const downloadFileName = generateApkDownloadFileName(appRecord.name, appRecord.apk_storage_path);
-    let downloadUrl = appRecord.apk_download_url;
-    if (!downloadUrl || downloadUrl.startsWith("/api/")) {
+    const isGoogleDrive = Boolean(appRecord.google_drive_url && isValidGoogleDriveUrl(appRecord.google_drive_url));
+    let downloadUrl = "";
+    if (isGoogleDrive) {
+      downloadUrl = appRecord.google_drive_url;
+    } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith("/api/")) {
+      downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
+    } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== "google_drive") {
       downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
     } else {
-      downloadUrl = formatCleanDownloadUrl(downloadUrl, appRecord.apk_storage_path, appRecord.name);
+      downloadUrl = appRecord.apk_download_url || "";
     }
+    const downloadFileName = generateApkDownloadFileName(appRecord.name, appRecord.apk_storage_path || "app.apk");
     sendSuccess(res, {
       id: appRecord.id,
       name: appRecord.name,
@@ -1146,6 +1202,7 @@ app.post("/api/apps/:id/download", async (req, res) => {
       version: appRecord.version_name,
       fileSize: appRecord.apk_file_size,
       downloadUrl,
+      isGoogleDrive,
       downloadsCount: newCount
     });
   } catch (err) {
@@ -1225,9 +1282,18 @@ app.get("/api/admin/apps", requireAdmin, async (req, res) => {
 app.post("/api/apps", requireAdmin, async (req, res) => {
   try {
     const body = req.body;
-    if (!body.name || !body.package_name || !body.apk_storage_path) {
-      return sendError(res, 400, "VALIDATION_ERROR", "Missing required application fields: name, package_name, apk_storage_path.");
+    if (!body.name || !body.package_name) {
+      return sendError(res, 400, "VALIDATION_ERROR", "Missing required fields: Application Name and Package Name are required.");
     }
+    const gDriveUrl = body.google_drive_url ? String(body.google_drive_url).trim() : null;
+    if (gDriveUrl && !isValidGoogleDriveUrl(gDriveUrl)) {
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid Google Drive URL. Please enter a valid Google Drive file link (e.g. https://drive.google.com/file/d/...).");
+    }
+    if (!gDriveUrl && !body.apk_storage_path && !body.apk_download_url) {
+      return sendError(res, 400, "VALIDATION_ERROR", "Please provide either a valid Google Drive APK URL or an uploaded APK file.");
+    }
+    const apkStoragePath = body.apk_storage_path || (gDriveUrl ? "google_drive" : "direct_url");
+    const apkDownloadUrl = gDriveUrl || (body.apk_download_url ? formatCleanDownloadUrl(body.apk_download_url, apkStoragePath, body.name) : "");
     const created = await createApplication({
       name: body.name,
       slug: body.slug || body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
@@ -1239,8 +1305,9 @@ app.post("/api/apps", requireAdmin, async (req, res) => {
       category: body.category || "Utilities",
       icon_url: body.icon_url || "",
       screenshots: Array.isArray(body.screenshots) ? body.screenshots : [],
-      apk_storage_path: body.apk_storage_path,
-      apk_download_url: formatCleanDownloadUrl(body.apk_download_url, body.apk_storage_path, body.name),
+      apk_storage_path: apkStoragePath,
+      apk_download_url: apkDownloadUrl,
+      google_drive_url: gDriveUrl || null,
       apk_file_size: Number(body.apk_file_size) || 0,
       apk_sha256: body.apk_sha256 || "",
       min_sdk: Number(body.min_sdk) || 21,
@@ -1258,7 +1325,18 @@ app.post("/api/apps", requireAdmin, async (req, res) => {
 app.patch("/api/apps/:id", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    const updates = req.body;
+    const updates = { ...req.body };
+    if (updates.google_drive_url !== void 0) {
+      if (updates.google_drive_url) {
+        const trimmedDriveUrl = String(updates.google_drive_url).trim();
+        if (!isValidGoogleDriveUrl(trimmedDriveUrl)) {
+          return sendError(res, 400, "VALIDATION_ERROR", "Invalid Google Drive URL. Please enter a valid Google Drive file link.");
+        }
+        updates.google_drive_url = trimmedDriveUrl;
+      } else {
+        updates.google_drive_url = null;
+      }
+    }
     if (updates.apk_download_url && updates.apk_storage_path) {
       updates.apk_download_url = formatCleanDownloadUrl(updates.apk_download_url, updates.apk_storage_path, updates.name);
     }
