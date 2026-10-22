@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { Download, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Download, CheckCircle2, AlertCircle, Loader2, ExternalLink } from 'lucide-react';
 import { api } from '../../services/api';
 import { formatBytes } from '../../lib/formatters';
+import { isValidGoogleDriveUrl } from '../../lib/drive';
 
 interface DownloadButtonProps {
   appId: string;
   appName: string;
   fileSize?: number;
   variant?: 'sm' | 'lg';
+  isGoogleDrive?: boolean;
   onDownloadSuccess?: (newCount: number) => void;
   className?: string;
 }
@@ -17,11 +19,13 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
   appName,
   fileSize,
   variant = 'sm',
+  isGoogleDrive = false,
   onDownloadSuccess,
   className = '',
 }) => {
   const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [openedDrive, setOpenedDrive] = useState(isGoogleDrive);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation(); // prevent card click
@@ -33,23 +37,39 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
     try {
       const result = await api.downloadApp(appId);
 
-      // Trigger actual browser download
+      const isDrive = Boolean(result.isGoogleDrive || (result.downloadUrl && isValidGoogleDriveUrl(result.downloadUrl)));
+      if (isDrive) {
+        setOpenedDrive(true);
+      }
+
+      // Trigger actual browser download or open Google Drive page
       if (result.downloadUrl) {
-        const a = document.createElement('a');
-        a.href = result.downloadUrl;
-        
-        // Clean, user-friendly filename based on application name (e.g. "SensiShare.apk", "My App.apk")
-        let cleanName = result.filename;
-        if (!cleanName) {
-          cleanName = appName.trim().replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').trim();
-          if (!cleanName.toLowerCase().endsWith('.apk')) {
-            cleanName = `${cleanName}.apk`;
+        if (isDrive) {
+          // Open that application's Google Drive file page in a NEW browser tab
+          // The original WinterBuilds page remains open
+          const a = document.createElement('a');
+          a.href = result.downloadUrl;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else {
+          // Direct file download
+          const a = document.createElement('a');
+          a.href = result.downloadUrl;
+          let cleanName = result.filename;
+          if (!cleanName) {
+            cleanName = appName.trim().replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').trim();
+            if (!cleanName.toLowerCase().endsWith('.apk')) {
+              cleanName = `${cleanName}.apk`;
+            }
           }
+          a.download = cleanName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
         }
-        a.download = cleanName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
       }
 
       setState('success');
@@ -69,6 +89,8 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
     }
   };
 
+  const isDriveMode = isGoogleDrive || openedDrive;
+
   if (variant === 'lg') {
     return (
       <div className="flex flex-col items-start gap-1.5 w-full sm:w-auto">
@@ -87,12 +109,12 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
           {state === 'loading' ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              <span>Preparing Download...</span>
+              <span>Preparing {isDriveMode ? 'Google Drive Link...' : 'Download...'}</span>
             </>
           ) : state === 'success' ? (
             <>
               <CheckCircle2 className="w-5 h-5" />
-              <span>Starting Download...</span>
+              <span>{isDriveMode ? 'Opening in New Tab...' : 'Starting Download...'}</span>
             </>
           ) : state === 'error' ? (
             <>
@@ -102,8 +124,9 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
           ) : (
             <>
               <Download className="w-5 h-5" />
-              <span>Download APK</span>
-              {fileSize ? (
+              <span>{isDriveMode ? 'Download via Google Drive' : 'Download APK'}</span>
+              {isDriveMode && <ExternalLink className="w-4 h-4 ml-0.5 opacity-90" />}
+              {fileSize && !isDriveMode ? (
                 <span className="text-amber-200/90 text-sm font-mono font-medium ml-1">
                   ({formatBytes(fileSize)})
                 </span>
@@ -124,7 +147,7 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
       id={`download-btn-sm-${appId}`}
       onClick={handleDownload}
       disabled={state === 'loading'}
-      title={`Download ${appName} APK`}
+      title={isDriveMode ? `Open ${appName} on Google Drive in new tab` : `Download ${appName} APK`}
       className={`p-2.5 rounded-xl border transition-all active:scale-95 shrink-0 ${
         state === 'success'
           ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
@@ -140,7 +163,10 @@ export const DownloadButton: React.FC<DownloadButtonProps> = ({
       ) : state === 'error' ? (
         <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
       ) : (
-        <Download className="w-4 h-4" />
+        <div className="flex items-center gap-1">
+          <Download className="w-4 h-4" />
+          {isDriveMode && <ExternalLink className="w-2.5 h-2.5 opacity-70" />}
+        </div>
       )}
     </button>
   );

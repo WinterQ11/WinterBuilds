@@ -12,7 +12,7 @@ export interface UploadAuthorization {
   method: 'PUT' | 'POST';
   path: string;
   token?: string;
-  provider: 'supabase' | 'direct';
+  provider: 'supabase' | 'direct' | 'chunked';
   headers?: Record<string, string>;
   originalFileName?: string;
 }
@@ -275,22 +275,17 @@ export async function createUploadAuthorization(params: {
     }
   }
 
-  // If Supabase is not configured and running on Vercel, check Vercel's 4.5 MB payload limit
-  const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-  if (isVercel && params.fileSize && params.fileSize > 4.5 * 1024 * 1024) {
-    const sizeMb = (params.fileSize / (1024 * 1024)).toFixed(1);
-    throw new Error(
-      `Direct upload of ${sizeMb} MB APK requires Supabase Storage in production. Vercel serverless functions strictly reject payloads exceeding 4.5 MB. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel Project Environment Variables to enable direct-to-storage uploads of at least 100 MB.`
-    );
-  }
-
-  // Fallback direct storage handler with signed upload token
+  // 2. Fallback to resilient chunked upload (works for any file size and stays under Vercel's 4.5 MB limit)
   const uploadToken = createAdminSessionToken('winterbuilds99@gmail.com');
+  const useChunked = Boolean(params.fileSize && params.fileSize > 4 * 1024 * 1024);
+
   return {
-    uploadUrl: `/api/upload/direct?path=${encodeURIComponent(storagePath)}&original=${encodeURIComponent(originalFileName)}&token=${encodeURIComponent(uploadToken)}`,
+    uploadUrl: useChunked
+      ? '/api/upload/chunk'
+      : `/api/upload/direct?path=${encodeURIComponent(storagePath)}&original=${encodeURIComponent(originalFileName)}&token=${encodeURIComponent(uploadToken)}`,
     path: storagePath,
     method: 'POST',
-    provider: 'direct',
+    provider: useChunked ? 'chunked' : 'direct',
     token: uploadToken,
     originalFileName,
     headers: {

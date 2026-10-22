@@ -84,6 +84,7 @@ export const AppCard: React.FC<AppCardProps> = ({ app, onSelect, onDownloadIncre
           appId={app.id}
           appName={app.name}
           fileSize={app.apk_file_size}
+          isGoogleDrive={Boolean(app.google_drive_url)}
           onDownloadSuccess={(newCount) => onDownloadIncrement?.(app.id, newCount)}
         />
       </div>

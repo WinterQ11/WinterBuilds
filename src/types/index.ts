@@ -48,6 +48,7 @@ export interface Application {
   downloads_count: number;
   status: AppStatus;
   featured: boolean;
+  google_drive_url?: string | null;
   created_at: string;
   updated_at: string;
   published_at?: string | null;

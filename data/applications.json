@@ -1,1 +1,28 @@
-[]
+[
+  {
+    "name": "SensiShare Pro",
+    "slug": "sensishare-pro",
+    "package_name": "org.winterbuilds.sensishare",
+    "version_name": "2.4.0",
+    "version_code": 240,
+    "description": "Secure and verified file transfer utility for Android.",
+    "short_description": "Encrypted point-to-point file exchange.",
+    "category": "Tools",
+    "icon_url": "",
+    "screenshots": [],
+    "apk_storage_path": "google_drive",
+    "apk_download_url": "https://drive.google.com/file/d/1vA9w2LqZ9b8_test_file_id/view?usp=sharing",
+    "google_drive_url": "https://drive.google.com/file/d/1vA9w2LqZ9b8_test_file_id/view?usp=sharing",
+    "apk_file_size": 0,
+    "apk_sha256": "",
+    "min_sdk": 21,
+    "target_sdk": 34,
+    "downloads_count": 3,
+    "status": "published",
+    "featured": true,
+    "id": "abb4318f-f52b-4f0e-9f9a-a9923b5e7d50",
+    "created_at": "2026-10-22T07:42:25.702Z",
+    "updated_at": "2026-10-22T07:42:25.729Z",
+    "published_at": "2026-10-22T07:42:25.702Z"
+  }
+]

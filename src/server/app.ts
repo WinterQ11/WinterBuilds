@@ -27,6 +27,7 @@ import {
 } from './services/auth';
 import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient, verifySupabaseConnection } from '../lib/supabase';
 import { generateAppEnhancements } from '../lib/gemini';
+import { isValidGoogleDriveUrl } from '../lib/drive';
 import type { Application } from '../types';
 import path from 'path';
 import fs from 'fs';
@@ -149,19 +150,25 @@ app.post('/api/apps/:id/download', async (req, res) => {
       return sendError(res, 404, 'APP_NOT_FOUND', 'Application not found for download.');
     }
 
-    // Atomic download increment
+    // Atomic download increment (increments once per click)
     const newCount = await incrementDownloadCount(id);
 
-    // Generate intended clean download filename (e.g. "SensiShare.apk" or "My App.apk")
-    const downloadFileName = generateApkDownloadFileName(appRecord.name, appRecord.apk_storage_path);
+    // If Google Drive URL is configured and valid, prefer it over direct storage download
+    const isGoogleDrive = Boolean(appRecord.google_drive_url && isValidGoogleDriveUrl(appRecord.google_drive_url));
 
-    // Resolve direct download URL with clean filename query parameter
-    let downloadUrl = appRecord.apk_download_url;
-    if (!downloadUrl || downloadUrl.startsWith('/api/')) {
+    let downloadUrl = '';
+    if (isGoogleDrive) {
+      downloadUrl = appRecord.google_drive_url!;
+    } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith('/api/')) {
+      downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
+    } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== 'google_drive') {
       downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
     } else {
-      downloadUrl = formatCleanDownloadUrl(downloadUrl, appRecord.apk_storage_path, appRecord.name);
+      downloadUrl = appRecord.apk_download_url || '';
     }
+
+    // Generate intended clean download filename (e.g. "SensiShare.apk" or "My App.apk")
+    const downloadFileName = generateApkDownloadFileName(appRecord.name, appRecord.apk_storage_path || 'app.apk');
 
     sendSuccess(res, {
       id: appRecord.id,
@@ -170,6 +177,7 @@ app.post('/api/apps/:id/download', async (req, res) => {
       version: appRecord.version_name,
       fileSize: appRecord.apk_file_size,
       downloadUrl,
+      isGoogleDrive,
       downloadsCount: newCount,
     });
   } catch (err: any) {
@@ -273,9 +281,21 @@ app.get('/api/admin/apps', requireAdmin, async (req, res) => {
 app.post('/api/apps', requireAdmin, async (req, res) => {
   try {
     const body = req.body;
-    if (!body.name || !body.package_name || !body.apk_storage_path) {
-      return sendError(res, 400, 'VALIDATION_ERROR', 'Missing required application fields: name, package_name, apk_storage_path.');
+    if (!body.name || !body.package_name) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Missing required fields: Application Name and Package Name are required.');
     }
+
+    const gDriveUrl = body.google_drive_url ? String(body.google_drive_url).trim() : null;
+    if (gDriveUrl && !isValidGoogleDriveUrl(gDriveUrl)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid Google Drive URL. Please enter a valid Google Drive file link (e.g. https://drive.google.com/file/d/...).');
+    }
+
+    if (!gDriveUrl && !body.apk_storage_path && !body.apk_download_url) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Please provide either a valid Google Drive APK URL or an uploaded APK file.');
+    }
+
+    const apkStoragePath = body.apk_storage_path || (gDriveUrl ? 'google_drive' : '');
+    const apkDownloadUrl = gDriveUrl || (body.apk_download_url ? formatCleanDownloadUrl(body.apk_download_url, apkStoragePath, body.name) : '');
 
     const created = await createApplication({
       name: body.name,
@@ -288,8 +308,9 @@ app.post('/api/apps', requireAdmin, async (req, res) => {
       category: body.category || 'Utilities',
       icon_url: body.icon_url || '',
       screenshots: Array.isArray(body.screenshots) ? body.screenshots : [],
-      apk_storage_path: body.apk_storage_path,
-      apk_download_url: formatCleanDownloadUrl(body.apk_download_url, body.apk_storage_path, body.name),
+      apk_storage_path: apkStoragePath,
+      apk_download_url: apkDownloadUrl,
+      google_drive_url: gDriveUrl || null,
       apk_file_size: Number(body.apk_file_size) || 0,
       apk_sha256: body.apk_sha256 || '',
       min_sdk: Number(body.min_sdk) || 21,
@@ -310,7 +331,19 @@ app.post('/api/apps', requireAdmin, async (req, res) => {
 app.patch('/api/apps/:id', requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
-    const updates = req.body;
+    const updates = { ...req.body };
+
+    if (updates.google_drive_url !== undefined) {
+      if (updates.google_drive_url) {
+        const trimmedDriveUrl = String(updates.google_drive_url).trim();
+        if (!isValidGoogleDriveUrl(trimmedDriveUrl)) {
+          return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid Google Drive URL. Please enter a valid Google Drive file link.');
+        }
+        updates.google_drive_url = trimmedDriveUrl;
+      } else {
+        updates.google_drive_url = null;
+      }
+    }
 
     if (updates.apk_download_url && updates.apk_storage_path) {
       updates.apk_download_url = formatCleanDownloadUrl(updates.apk_download_url, updates.apk_storage_path, updates.name);

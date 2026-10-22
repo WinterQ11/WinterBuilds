@@ -156,6 +156,7 @@ export const AppDetailPage: React.FC<AppDetailPageProps> = ({
               appName={app.name}
               fileSize={app.apk_file_size}
               variant="lg"
+              isGoogleDrive={Boolean(app.google_drive_url)}
               onDownloadSuccess={(newCount) => setDownloadCount(newCount)}
             />
             <span className="text-xs text-center md:text-right font-mono text-[#85786a] dark:text-[#807567]">
@@ -250,6 +251,17 @@ export const AppDetailPage: React.FC<AppDetailPageProps> = ({
               <div className="flex justify-between py-1.5 border-b border-[#eee3d1] dark:border-[#25211c]">
                 <span className="text-[#7d7062] dark:text-[#887c6e]">Target OS</span>
                 <span className="font-medium text-right">{getAndroidVersionName(app.target_sdk || 34)}</span>
+              </div>
+
+              <div className="flex justify-between py-1.5 border-b border-[#eee3d1] dark:border-[#25211c]">
+                <span className="text-[#7d7062] dark:text-[#887c6e]">Download Source</span>
+                {app.google_drive_url ? (
+                  <span className="font-semibold text-amber-700 dark:text-amber-400 inline-flex items-center gap-1">
+                    Google Drive <ExternalLink className="w-3 h-3" />
+                  </span>
+                ) : (
+                  <span className="font-semibold">Direct Storage CDN</span>
+                )}
               </div>
 
               <div className="flex justify-between py-1.5 border-b border-[#eee3d1] dark:border-[#25211c]">

@@ -116,15 +116,22 @@ export const AppTable: React.FC<AppTableProps> = ({
 
                     {/* Status */}
                     <td className="py-3.5 px-4">
-                      {app.status === 'published' ? (
-                        <Badge variant="emerald" size="sm">
-                          Published
-                        </Badge>
-                      ) : (
-                        <Badge variant="amber" size="sm">
-                          Draft
-                        </Badge>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {app.status === 'published' ? (
+                          <Badge variant="emerald" size="sm">
+                            Published
+                          </Badge>
+                        ) : (
+                          <Badge variant="amber" size="sm">
+                            Draft
+                          </Badge>
+                        )}
+                        {app.google_drive_url && (
+                          <span title="Uses Google Drive download link" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-800 border border-amber-500/30 dark:bg-amber-400/10 dark:text-amber-300 dark:border-amber-400/20">
+                            Drive
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* File Size */}
@@ -145,6 +152,18 @@ export const AppTable: React.FC<AppTableProps> = ({
                     {/* Actions */}
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {app.google_drive_url && (
+                          <a
+                            href={app.google_drive_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open Google Drive file page in new tab"
+                            className="p-1.5 rounded-lg border hover:bg-amber-500/10 text-amber-700 border-amber-600/30 dark:text-amber-400 dark:border-amber-400/20"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        )}
+
                         <button
                           onClick={() => onViewPublic(app)}
                           title="View public page"

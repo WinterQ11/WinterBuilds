@@ -5,6 +5,7 @@ import { SearchBar } from '../components/apps/SearchBar';
 import { CategoryFilter } from '../components/apps/CategoryFilter';
 import { AppGrid } from '../components/apps/AppGrid';
 import { Badge } from '../components/common/Badge';
+import { DownloadButton } from '../components/apps/DownloadButton';
 import {
   ShieldCheck,
   Download,
@@ -179,11 +180,20 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectApp, onNavigate }) =
                   {app.short_description || app.description}
                 </p>
                 <div className="pt-2 border-t flex items-center justify-between text-[11px] font-mono border-[#eee4d2] dark:border-[#26211c] text-[#7a6e60] dark:text-[#887c6e]">
-                  <span>v{app.version_name}</span>
-                  <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400 font-semibold">
-                    <Download className="w-3 h-3" />
-                    {app.downloads_count}
-                  </span>
+                  <div>
+                    <span>v{app.version_name}</span>
+                    <span className="flex items-center gap-1 text-[#8f8373] text-[10px] mt-0.5">
+                      <Download className="w-2.5 h-2.5" />
+                      {app.downloads_count}
+                    </span>
+                  </div>
+                  <DownloadButton
+                    appId={app.id}
+                    appName={app.name}
+                    fileSize={app.apk_file_size}
+                    isGoogleDrive={Boolean(app.google_drive_url)}
+                    onDownloadSuccess={(newCount) => handleDownloadIncrement(app.id, newCount)}
+                  />
                 </div>
               </div>
             ))}

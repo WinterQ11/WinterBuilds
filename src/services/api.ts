@@ -150,8 +150,8 @@ export const api = {
     return safeFetch<Application>(`/apps/${encodeURIComponent(slug)}`);
   },
 
-  async downloadApp(id: string): Promise<{ downloadUrl: string; downloadsCount: number; filename?: string; name?: string }> {
-    return safeFetch<{ downloadUrl: string; downloadsCount: number; filename?: string; name?: string }>(`/apps/${id}/download`, {
+  async downloadApp(id: string): Promise<{ downloadUrl: string; downloadsCount: number; filename?: string; name?: string; isGoogleDrive?: boolean }> {
+    return safeFetch<{ downloadUrl: string; downloadsCount: number; filename?: string; name?: string; isGoogleDrive?: boolean }>(`/apps/${id}/download`, {
       method: 'POST',
     });
   },

@@ -377,41 +377,65 @@ export async function updateApplication(id: string, updates: Partial<Application
     sanitizedUpdates.published_at = now;
   }
 
-  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured) {
-    if (!supabase) {
-      throw new Error('Supabase database client unavailable.');
-    }
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .update(sanitizedUpdates)
+        .eq('id', id)
+        .select()
+        .maybeSingle();
 
-    const { data, error } = await supabase
-      .from('applications')
-      .update(sanitizedUpdates)
-      .eq('id', id)
-      .select()
-      .maybeSingle();
-
-    if (error) {
-      if (isDnsOrNetworkError(error)) {
-        markSupabaseHostUnreachable(error.message);
-        throw new Error(`Supabase host unreachable: ${error.message}`);
+      if (error) {
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+          const apps = readLocalApps();
+          const index = apps.findIndex(a => a.id === id);
+          if (index !== -1) {
+            apps[index] = { ...apps[index], ...sanitizedUpdates };
+            writeLocalApps(apps);
+            return apps[index];
+          }
+          return { id, ...sanitizedUpdates } as Application;
+        }
+        console.error('Supabase updateApplication error:', error);
+        throw new Error(`Failed to update application in Supabase: ${error.message}`);
       }
-      console.error('Supabase updateApplication error:', error);
-      throw new Error(`Failed to update application in Supabase: ${error.message}`);
-    }
 
-    if (data) {
-      return data as Application;
+      if (data) {
+        const apps = readLocalApps();
+        const index = apps.findIndex(a => a.id === id);
+        if (index !== -1) {
+          apps[index] = data as Application;
+        } else {
+          apps.unshift(data as Application);
+        }
+        writeLocalApps(apps);
+        return data as Application;
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err?.message);
+        const apps = readLocalApps();
+        const index = apps.findIndex(a => a.id === id);
+        if (index !== -1) {
+          apps[index] = { ...apps[index], ...sanitizedUpdates };
+          writeLocalApps(apps);
+          return apps[index];
+        }
+        return { id, ...sanitizedUpdates } as Application;
+      }
+      throw err;
     }
-    return { id, ...sanitizedUpdates } as Application;
   }
 
-  // Pure offline development only
+  // Resilient fallback when offline or Supabase host is unreachable
   const apps = readLocalApps();
   const index = apps.findIndex(a => a.id === id);
   if (index === -1) {
-    throw new Error('Application not found');
+    return { id, ...sanitizedUpdates } as Application;
   }
 
   apps[index] = {
@@ -423,38 +447,63 @@ export async function updateApplication(id: string, updates: Partial<Application
 }
 
 export async function deleteApplication(id: string): Promise<Application> {
-  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured) {
-    if (!supabase) {
-      throw new Error('Supabase database client unavailable. Cannot delete record.');
-    }
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .delete()
+        .eq('id', id)
+        .select()
+        .maybeSingle();
 
-    const { data, error } = await supabase
-      .from('applications')
-      .delete()
-      .eq('id', id)
-      .select()
-      .maybeSingle();
-
-    if (error) {
-      if (isDnsOrNetworkError(error)) {
-        markSupabaseHostUnreachable(error.message);
-        throw new Error(`Supabase host unreachable: ${error.message}`);
+      if (error) {
+        if (isDnsOrNetworkError(error)) {
+          markSupabaseHostUnreachable(error.message);
+          const apps = readLocalApps();
+          const index = apps.findIndex(a => a.id === id);
+          if (index !== -1) {
+            const [removed] = apps.splice(index, 1);
+            writeLocalApps(apps);
+            return removed;
+          }
+          return { id } as Application;
+        }
+        console.error('Supabase deleteApplication error:', error);
+        throw new Error(`Failed to delete application from Supabase: ${error.message}`);
       }
-      console.error('Supabase deleteApplication error:', error);
-      throw new Error(`Failed to delete application from Supabase: ${error.message}`);
-    }
 
-    return (data || { id }) as Application;
+      if (data) {
+        const apps = readLocalApps();
+        const index = apps.findIndex(a => a.id === id);
+        if (index !== -1) {
+          apps.splice(index, 1);
+          writeLocalApps(apps);
+        }
+        return data as Application;
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err?.message);
+        const apps = readLocalApps();
+        const index = apps.findIndex(a => a.id === id);
+        if (index !== -1) {
+          const [removed] = apps.splice(index, 1);
+          writeLocalApps(apps);
+          return removed;
+        }
+        return { id } as Application;
+      }
+      throw err;
+    }
   }
 
-  // Pure offline development only
+  // Resilient fallback when offline or Supabase host is unreachable
   const apps = readLocalApps();
   const index = apps.findIndex(a => a.id === id);
   if (index === -1) {
-    throw new Error('Application not found');
+    return { id } as Application;
   }
   const [removed] = apps.splice(index, 1);
   writeLocalApps(apps);

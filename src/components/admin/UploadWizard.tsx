@@ -21,7 +21,9 @@ import {
   ShieldCheck,
   Loader2,
   Eye,
+  ExternalLink,
 } from 'lucide-react';
+import { isValidGoogleDriveUrl } from '../../lib/drive';
 
 interface UploadWizardProps {
   existingApp?: Application | null; // For editing or replacing APK
@@ -61,6 +63,9 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
     existingApp?.screenshots?.join('\n') || ''
   );
   const [featured, setFeatured] = useState(existingApp?.featured || false);
+
+  // Google Drive APK URL (preferred download destination)
+  const [googleDriveUrl, setGoogleDriveUrl] = useState(existingApp?.google_drive_url || '');
 
   // Storage info
   const [apkStoragePath, setApkStoragePath] = useState(existingApp?.apk_storage_path || '');
@@ -179,8 +184,22 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
   };
 
   const handleSaveApp = async (status: 'draft' | 'published') => {
-    if (!name || !packageName || !apkStoragePath) {
-      setUploadError('Please complete all required fields and upload an APK file.');
+    if (!name.trim() || !packageName.trim()) {
+      setUploadError('Please complete all required fields: Application Name and Package Name are required.');
+      return;
+    }
+
+    const trimmedDrive = googleDriveUrl.trim();
+    if (trimmedDrive && !isValidGoogleDriveUrl(trimmedDrive)) {
+      setUploadError('Invalid Google Drive URL. Please enter a valid Google Drive file link (e.g. https://drive.google.com/file/d/... or https://drive.google.com/open?id=...).');
+      return;
+    }
+
+    const hasDrive = Boolean(trimmedDrive && isValidGoogleDriveUrl(trimmedDrive));
+    const hasApk = Boolean(apkStoragePath || apkDownloadUrl);
+
+    if (!hasDrive && !hasApk) {
+      setUploadError('Please provide either a valid Google Drive APK URL or an uploaded APK package file.');
       return;
     }
 
@@ -192,18 +211,19 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
         .filter((s) => s.length > 0);
 
       const payload = {
-        name,
+        name: name.trim(),
         slug: slug || slugify(name),
-        package_name: packageName,
-        version_name: versionName,
-        version_code: versionCode,
+        package_name: packageName.trim(),
+        version_name: versionName || '1.0.0',
+        version_code: versionCode || 1,
         short_description: shortDescription,
         description,
         category,
         icon_url: iconUrl,
         screenshots,
-        apk_storage_path: apkStoragePath,
-        apk_download_url: apkDownloadUrl,
+        google_drive_url: trimmedDrive || null,
+        apk_storage_path: apkStoragePath || (hasDrive ? 'google_drive' : ''),
+        apk_download_url: apkDownloadUrl || (hasDrive ? trimmedDrive : ''),
         apk_file_size: apkFileSize,
         apk_sha256: apkSha256,
         status,
@@ -220,9 +240,9 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
       onSuccess(result);
     } catch (err: any) {
       console.error('Failed to save application:', err);
-      const isDbError = Boolean(apkStoragePath);
+      const isDbError = Boolean(apkStoragePath || trimmedDrive);
       const msg = isDbError
-        ? `APK successfully uploaded to storage (${apkStoragePath}), but saving to database failed: ${err.message || 'Database operation failed'}. Your uploaded file is safe; click Retry to try saving again.`
+        ? `Application data prepared, but saving to database failed: ${err.message || 'Database operation failed'}. Please retry.`
         : (err.message || 'Failed to save application.');
       setUploadError(msg);
     } finally {
@@ -243,10 +263,11 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
     category,
     icon_url: iconUrl,
     screenshots: screenshotsText.split('\n').filter(Boolean),
-    apk_storage_path: apkStoragePath,
-    apk_download_url: apkDownloadUrl,
+    apk_storage_path: apkStoragePath || (googleDriveUrl ? 'google_drive' : ''),
+    apk_download_url: apkDownloadUrl || (googleDriveUrl ? googleDriveUrl.trim() : ''),
     apk_file_size: apkFileSize,
     apk_sha256: apkSha256,
+    google_drive_url: googleDriveUrl.trim() || null,
     downloads_count: existingApp?.downloads_count || 0,
     status: 'draft',
     featured,
@@ -368,14 +389,50 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
               </div>
             </div>
 
+            {/* Google Drive APK URL direct input (Recommended option) */}
+            <div className="rounded-2xl p-5 border bg-amber-500/5 border-amber-500/30 dark:bg-amber-400/5 dark:border-amber-400/20 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[#3b3127] dark:text-[#f3eee5] flex items-center gap-1.5">
+                  <ExternalLink className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  Google Drive APK URL (No File Upload Required)
+                </span>
+                {googleDriveUrl && (
+                  isValidGoogleDriveUrl(googleDriveUrl) ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Valid Google Drive Link
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                      <AlertCircle className="w-3.5 h-3.5" /> Invalid Google Drive Link
+                    </span>
+                  )
+                )}
+              </div>
+              <input
+                id="wizard-step1-google-drive-url"
+                type="url"
+                placeholder="https://drive.google.com/file/d/1A2B3C.../view?usp=sharing"
+                value={googleDriveUrl}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setGoogleDriveUrl(val);
+                  setUploadError(null);
+                }}
+                className="w-full px-3.5 py-2.5 rounded-xl border text-xs font-mono bg-[#ffffff] border-[#d8ccb8] text-[#1f1914] dark:bg-[#141210] dark:border-[#332e27] dark:text-[#f8f5ee] focus:ring-2 focus:ring-amber-500/40"
+              />
+              <p className="text-[11px] text-[#786c5e] dark:text-[#887c6e]">
+                Paste your Google Drive file sharing page link here. When set, users clicking "Download" will open this link in a new tab. No direct APK file upload required.
+              </p>
+            </div>
+
             {/* Optional external APK URL input */}
             <div className="rounded-2xl p-4 border bg-[#faf6ee]/70 border-[#e3d7c3] dark:bg-[#1a1815]/70 dark:border-[#2b2721] space-y-2">
               <span className="text-xs font-semibold text-[#544739] dark:text-[#c4b7a6] block">
-                Or supply an external APK download URL directly:
+                Or supply an external direct APK download URL:
               </span>
               <input
                 type="url"
-                placeholder="https://github.com/.../releases/download/.../app.apk (or CDN / direct link)"
+                placeholder="https://github.com/.../releases/download/.../app.apk (or CDN link)"
                 value={apkDownloadUrl}
                 onChange={(e) => {
                   const val = e.target.value.trim();
@@ -387,7 +444,7 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
                 className="w-full px-3.5 py-2 rounded-xl border text-xs font-mono bg-[#ffffff] border-[#d8ccb8] text-[#1f1914] dark:bg-[#141210] dark:border-[#332e27] dark:text-[#f8f5ee]"
               />
               <p className="text-[11px] text-[#786c5e] dark:text-[#887c6e]">
-                Useful for large APK files or apps already distributed via GitHub Releases, F-Droid, or external CDNs.
+                Useful for large APK files or apps already distributed via external CDNs.
               </p>
             </div>
 
@@ -651,20 +708,53 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
               </div>
             </div>
 
+            {/* Google Drive APK URL Field */}
+            <div className="rounded-2xl p-4 border bg-amber-500/5 border-amber-500/30 dark:bg-amber-400/5 dark:border-amber-400/20 space-y-2">
+              <div className="flex items-center justify-between">
+                <label htmlFor="wizard-field-google-drive-url" className="block text-xs font-bold text-[#3b3127] dark:text-[#f3eee5]">
+                  Google Drive APK URL
+                </label>
+                {googleDriveUrl && (
+                  isValidGoogleDriveUrl(googleDriveUrl) ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Valid Google Drive Link
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                      <AlertCircle className="w-3.5 h-3.5" /> Invalid Google Drive Link
+                    </span>
+                  )
+                )}
+              </div>
+              <input
+                id="wizard-field-google-drive-url"
+                type="url"
+                value={googleDriveUrl}
+                onChange={(e) => {
+                  setGoogleDriveUrl(e.target.value);
+                  setUploadError(null);
+                }}
+                placeholder="https://drive.google.com/file/d/1A2B3C.../view?usp=sharing"
+                className="w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono bg-[#ffffff] border-[#ded4c3] text-[#1f1914] dark:bg-[#1a1815] dark:border-[#2b2721] dark:text-[#f8f5ee] focus:ring-2 focus:ring-amber-500/40"
+              />
+              <p className="text-[11px] text-[#716556] dark:text-[#918576]">
+                When configured, clicking "Download" will open this Google Drive file page in a new browser tab. If both a Google Drive URL and an uploaded APK exist, the Google Drive URL is preferred for downloads.
+              </p>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold mb-1 text-[#3b3127] dark:text-[#c4b7a6]">
-                APK Download Link / URL *
+                Direct APK Storage / Download URL {googleDriveUrl && isValidGoogleDriveUrl(googleDriveUrl) ? '(Optional)' : '*'}
               </label>
               <input
                 type="text"
-                required
                 value={apkDownloadUrl}
                 onChange={(e) => setApkDownloadUrl(e.target.value)}
-                placeholder="https://... or /api/downloads/..."
+                placeholder="https://... or /api/downloads/... (optional when Google Drive URL is provided)"
                 className="w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono bg-[#faf6ee] border-[#ded4c3] text-[#1f1914] dark:bg-[#1a1815] dark:border-[#2b2721] dark:text-[#f8f5ee]"
               />
               <p className="mt-1 text-[11px] text-[#716556] dark:text-[#918576]">
-                Direct download URL for the application package file.
+                Direct download URL fallback for the application package file.
               </p>
             </div>
 
@@ -699,17 +789,39 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
             {/* Technical Verification Details */}
             <div className="rounded-2xl p-4 border text-xs font-mono space-y-1.5 bg-[#f5efe3] border-[#e0d5c0] dark:bg-[#191714] dark:border-[#28241e]">
               <div className="flex justify-between">
-                <span className="text-[#7d7060] dark:text-[#887c6e]">Storage Path:</span>
-                <span className="truncate max-w-[280px]">{apkStoragePath}</span>
+                <span className="text-[#7d7060] dark:text-[#887c6e]">Download Source:</span>
+                <span className="font-semibold text-amber-700 dark:text-amber-400">
+                  {googleDriveUrl && isValidGoogleDriveUrl(googleDriveUrl)
+                    ? 'Google Drive Page (Opens in new tab)'
+                    : apkStoragePath
+                    ? 'Direct Object Storage CDN'
+                    : 'External APK URL'}
+                </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-[#7d7060] dark:text-[#887c6e]">SHA-256 Hash:</span>
-                <span className="truncate max-w-[280px]">{apkSha256}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#7d7060] dark:text-[#887c6e]">File Size:</span>
-                <span>{formatBytes(apkFileSize)}</span>
-              </div>
+              {googleDriveUrl && isValidGoogleDriveUrl(googleDriveUrl) && (
+                <div className="flex justify-between">
+                  <span className="text-[#7d7060] dark:text-[#887c6e]">Google Drive URL:</span>
+                  <span className="truncate max-w-[280px]">{googleDriveUrl}</span>
+                </div>
+              )}
+              {apkStoragePath && (
+                <div className="flex justify-between">
+                  <span className="text-[#7d7060] dark:text-[#887c6e]">Storage Path:</span>
+                  <span className="truncate max-w-[280px]">{apkStoragePath}</span>
+                </div>
+              )}
+              {apkSha256 && (
+                <div className="flex justify-between">
+                  <span className="text-[#7d7060] dark:text-[#887c6e]">SHA-256 Hash:</span>
+                  <span className="truncate max-w-[280px]">{apkSha256}</span>
+                </div>
+              )}
+              {apkFileSize > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-[#7d7060] dark:text-[#887c6e]">File Size:</span>
+                  <span>{formatBytes(apkFileSize)}</span>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -782,16 +894,24 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (step === 1 && !apkStoragePath && !apkDownloadUrl) {
-                setUploadError('Please select and upload an APK file or provide an APK download link before proceeding.');
-                return;
+              if (step === 1) {
+                const hasDrive = Boolean(googleDriveUrl.trim() && isValidGoogleDriveUrl(googleDriveUrl.trim()));
+                const hasApk = Boolean(apkStoragePath || apkDownloadUrl);
+                if (!hasDrive && !hasApk) {
+                  if (googleDriveUrl.trim() && !isValidGoogleDriveUrl(googleDriveUrl.trim())) {
+                    setUploadError('Invalid Google Drive URL. Please enter a valid Google Drive file link.');
+                  } else {
+                    setUploadError('Please select and upload an APK file, or provide a valid Google Drive APK URL before proceeding.');
+                  }
+                  return;
+                }
               }
               setUploadError(null);
               setStep(step + 1);
             }}
-            disabled={step === 1 && !apkStoragePath && !apkDownloadUrl}
+            disabled={step === 1 && !apkStoragePath && !apkDownloadUrl && !(googleDriveUrl.trim() && isValidGoogleDriveUrl(googleDriveUrl.trim()))}
             className={`inline-flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold transition-all ${
-              step === 1 && !apkStoragePath && !apkDownloadUrl
+              step === 1 && !apkStoragePath && !apkDownloadUrl && !(googleDriveUrl.trim() && isValidGoogleDriveUrl(googleDriveUrl.trim()))
                 ? 'opacity-50 cursor-not-allowed bg-[#ddd1be] text-[#716454] dark:bg-[#25221d] dark:text-[#6a6053]'
                 : 'bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-neutral-950'
             }`}
