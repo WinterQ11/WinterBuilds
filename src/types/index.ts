@@ -112,6 +112,7 @@ export interface AdminStatusInfo {
   supabaseConfigured: boolean;
   supabaseConnected: boolean;
   supabaseError?: string | null;
+  supabaseDiagnostics?: string | null;
   defaultAdminEmail?: string;
 }
 

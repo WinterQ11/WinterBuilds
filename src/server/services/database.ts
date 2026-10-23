@@ -5,6 +5,7 @@ import {
   isDnsOrNetworkError,
   markSupabaseHostUnreachable,
   isSupabaseConfigured,
+  getSupabaseDiagnostics,
 } from '../../lib/supabase';
 import { verifyAdminSessionToken, verifyAdminPassword } from './auth';
 import { isValidGoogleDriveUrl } from '../../lib/drive';
@@ -354,7 +355,8 @@ export async function createApplication(appData: Omit<Application, 'id' | 'creat
 
   if (isConfigured) {
     if (!supabase) {
-      throw new Error('Supabase database client could not be initialized with configured environment keys.');
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
     }
 
     // Attempt direct commit to Supabase applications table
@@ -394,7 +396,13 @@ export async function createApplication(appData: Omit<Application, 'id' | 'creat
     return saved;
   }
 
-  // Pure offline development (when Supabase credentials are not provided)
+  // If running in production or on Vercel without Supabase configured, fail fast with diagnostics
+  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    const diag = getSupabaseDiagnostics();
+    throw new Error(`Application cannot be saved: Supabase database is not configured in this production environment. ${diag.summary}`);
+  }
+
+  // Pure offline local development only (when Supabase credentials are not provided)
   const apps = readLocalApps();
   apps.unshift(newApp);
   writeLocalApps(apps);
@@ -417,7 +425,8 @@ export async function updateApplication(id: string, updates: Partial<Application
 
   if (isConfigured) {
     if (!supabase) {
-      throw new Error('Supabase database client could not be initialized with configured environment keys.');
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
     }
 
     let { data, error } = await supabase
@@ -481,7 +490,8 @@ export async function deleteApplication(id: string): Promise<Application> {
 
   if (isConfigured) {
     if (!supabase) {
-      throw new Error('Supabase database client unavailable.');
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
     }
 
     const { data, error } = await supabase

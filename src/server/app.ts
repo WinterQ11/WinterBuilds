@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import {
   listApplications,
@@ -25,7 +26,7 @@ import {
   createAdminSessionToken,
   isAllowedAdminEmail,
 } from './services/auth';
-import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient, verifySupabaseConnection } from '../lib/supabase';
+import { isSupabaseConfigured, isSupabaseConnected, getServerSupabaseClient, verifySupabaseConnection, getSupabaseDiagnostics } from '../lib/supabase';
 import { generateAppEnhancements } from '../lib/gemini';
 import { isValidGoogleDriveUrl } from '../lib/drive';
 import type { Application } from '../types';
@@ -90,12 +91,14 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // Health check and environment status
 app.get('/api/health', async (req, res) => {
   const supabaseStatus = await verifySupabaseConnection();
+  const diagnostics = getSupabaseDiagnostics();
   sendSuccess(res, {
     status: supabaseStatus.connected ? 'healthy' : (supabaseStatus.configured ? 'degraded' : 'local'),
     product: 'WinterBuilds',
     supabaseConnected: supabaseStatus.connected,
     supabaseConfigured: supabaseStatus.configured,
     supabaseError: supabaseStatus.error || null,
+    supabaseDiagnostics: diagnostics.summary,
     storageProvider: supabaseStatus.connected ? 'supabase' : 'local-resilient',
     timestamp: new Date().toISOString(),
   });
@@ -196,6 +199,7 @@ app.get('/api/admin/status', async (req, res) => {
   const result = await verifyAdminAuthorization(authHeader);
   const passwordConfigured = isAdminPasswordConfigured();
   const supabaseStatus = await verifySupabaseConnection();
+  const diagnostics = getSupabaseDiagnostics();
 
   sendSuccess(res, {
     authenticated: result.authorized,
@@ -204,6 +208,7 @@ app.get('/api/admin/status', async (req, res) => {
     supabaseConfigured: supabaseStatus.configured,
     supabaseConnected: supabaseStatus.connected,
     supabaseError: supabaseStatus.error || null,
+    supabaseDiagnostics: diagnostics.summary,
     defaultAdminEmail: 'winterbuilds99@gmail.com',
   });
 });

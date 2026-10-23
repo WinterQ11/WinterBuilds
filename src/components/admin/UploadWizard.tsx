@@ -241,9 +241,12 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
     } catch (err: any) {
       console.error('Failed to save application:', err);
       const isDbError = Boolean(apkStoragePath || trimmedDrive);
-      const msg = isDbError
-        ? `Application data prepared, but saving to database failed: ${err.message || 'Database operation failed'}. Please retry.`
-        : (err.message || 'Failed to save application.');
+      const errorText = err.message || 'Database operation failed';
+      const msg = errorText.toLowerCase().includes('saving to database failed')
+        ? errorText
+        : isDbError
+        ? `Application data prepared, but saving to database failed: ${errorText}`
+        : errorText;
       setUploadError(msg);
     } finally {
       setIsSubmitting(false);
