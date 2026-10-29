@@ -63,19 +63,38 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [statusRes, statsRes, appsRes] = await Promise.all([
-        api.checkAdminStatus(),
+      // Check admin status independently so statusRes is always applied
+      try {
+        const statusRes = await api.checkAdminStatus();
+        setAdminStatus(statusRes);
+      } catch (statusErr: any) {
+        console.warn('Admin status check warning:', statusErr);
+      }
+
+      const [statsResult, appsResult] = await Promise.allSettled([
         api.getAdminStats(),
         api.getAdminApps({ limit: 100 }),
       ]);
-      setAdminStatus(statusRes);
-      setStats(statsRes);
-      setApps((prev) => {
-        const remoteApps = appsRes.applications || [];
-        const remoteIds = new Set(remoteApps.map((a) => a.id));
-        const pendingLocal = prev.filter((a) => !remoteIds.has(a.id));
-        return [...pendingLocal, ...remoteApps];
-      });
+
+      if (statsResult.status === 'fulfilled') {
+        setStats(statsResult.value);
+      }
+      if (appsResult.status === 'fulfilled') {
+        const remoteApps = appsResult.value.applications || [];
+        setApps((prev) => {
+          const remoteIds = new Set(remoteApps.map((a) => a.id));
+          const pendingLocal = prev.filter((a) => !remoteIds.has(a.id));
+          return [...pendingLocal, ...remoteApps];
+        });
+      }
+
+      if (statsResult.status === 'rejected' || appsResult.status === 'rejected') {
+        const errMessage =
+          (statsResult.status === 'rejected' ? statsResult.reason?.message : '') ||
+          (appsResult.status === 'rejected' ? appsResult.reason?.message : '') ||
+          'Failed to connect to the applications database.';
+        setLoadError(errMessage);
+      }
     } catch (err: any) {
       console.warn('Dashboard load warning:', err);
       setLoadError(err.message || 'Failed to connect to the applications database.');

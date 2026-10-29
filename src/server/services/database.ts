@@ -4,8 +4,10 @@ import {
   getServerSupabaseClient,
   isDnsOrNetworkError,
   markSupabaseHostUnreachable,
+  markSupabaseHostReachable,
   isSupabaseConfigured,
   getSupabaseDiagnostics,
+  isSupabaseHostKnownUnreachable,
 } from '../../lib/supabase';
 import { verifyAdminSessionToken, verifyAdminPassword } from './auth';
 import { isValidGoogleDriveUrl } from '../../lib/drive';
@@ -127,6 +129,37 @@ function normalizeApplication(row: any): Application {
   } as Application;
 }
 
+let hasSyncedExistingData = false;
+
+async function syncExistingLocalDataToSupabase(supabase: any): Promise<void> {
+  if (hasSyncedExistingData || isSupabaseHostKnownUnreachable()) return;
+  try {
+    const localApps = readLocalApps();
+    if (localApps.length === 0) {
+      hasSyncedExistingData = true;
+      return;
+    }
+
+    const { count, error } = await supabase
+      .from('applications')
+      .select('*', { count: 'exact', head: true });
+
+    if (!error && count === 0) {
+      console.log(`[Database] Preserving existing data: seeding ${localApps.length} local application(s) into Supabase...`);
+      for (const app of localApps) {
+        try {
+          await supabase.from('applications').upsert(app);
+        } catch {
+          // ignore single item seed error
+        }
+      }
+    }
+    hasSyncedExistingData = true;
+  } catch {
+    // Non-blocking sync check
+  }
+}
+
 export async function listApplications(options: ListAppsOptions = {}): Promise<{
   applications: Application[];
   total: number;
@@ -134,7 +167,20 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured && supabase) {
+  if (isConfigured) {
+    if (!supabase) {
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
+    }
+
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+    }
+
+    // Sync any existing local applications to Supabase on first connection
+    await syncExistingLocalDataToSupabase(supabase);
+
     try {
       let query = supabase.from('applications').select('*', { count: 'exact' });
 
@@ -181,11 +227,16 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
       if (error) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
-          return getFallbackLocalApplications(options);
+          const host = getSupabaseDiagnostics().urlHost;
+          throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+        }
+        if (error.message?.includes('Invalid API key') || error.code === 'PGRST301' || error.message?.includes('JWT')) {
+          throw new Error(`Supabase authentication failed (Invalid API key). Please verify that SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY in Vercel match your Supabase project.`);
         }
         throw new Error(`Database query failed: ${error.message}`);
       }
 
+      markSupabaseHostReachable();
       const normalizedApps = (data || []).map(normalizeApplication);
 
       return {
@@ -195,13 +246,14 @@ export async function listApplications(options: ListAppsOptions = {}): Promise<{
     } catch (err: any) {
       if (isDnsOrNetworkError(err)) {
         markSupabaseHostUnreachable(err?.message);
-        return getFallbackLocalApplications(options);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
       throw err;
     }
   }
 
-  // Pure offline development only (when Supabase credentials are not provided or host is unreachable)
+  // Pure offline development only (when Supabase credentials are not configured)
   return getFallbackLocalApplications(options);
 }
 
@@ -264,7 +316,7 @@ export async function getApplicationBySlug(slug: string): Promise<Application | 
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured && supabase) {
+  if (isConfigured && supabase && !isSupabaseHostKnownUnreachable()) {
     try {
       const { data, error } = await supabase
         .from('applications')
@@ -298,7 +350,7 @@ export async function getApplicationById(id: string): Promise<Application | null
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured && supabase) {
+  if (isConfigured && supabase && !isSupabaseHostKnownUnreachable()) {
     try {
       const { data, error } = await supabase
         .from('applications')
@@ -359,50 +411,64 @@ export async function createApplication(appData: Omit<Application, 'id' | 'creat
       throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
     }
 
-    // Attempt direct commit to Supabase applications table
-    let { data, error } = await supabase
-      .from('applications')
-      .insert([newApp])
-      .select()
-      .maybeSingle();
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+    }
 
-    // If column google_drive_url does not exist yet in user's Supabase schema, retry without it
-    // Note: apk_download_url already safely stores the Google Drive link and apk_storage_path is 'google_drive'
-    if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
-      const { google_drive_url, ...legacyApp } = newApp;
-      const retryRes = await supabase
+    let data: any = null;
+    let error: any = null;
+
+    try {
+      // Attempt direct commit to Supabase applications table
+      const res = await supabase
         .from('applications')
-        .insert([legacyApp])
+        .insert([newApp])
         .select()
         .maybeSingle();
-      data = retryRes.data;
-      error = retryRes.error;
+      data = res.data;
+      error = res.error;
+
+      // If column google_drive_url does not exist yet in user's Supabase schema, retry without it
+      // Note: apk_download_url already safely stores the Google Drive link and apk_storage_path is 'google_drive'
+      if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
+        const { google_drive_url, ...legacyApp } = newApp;
+        const retryRes = await supabase
+          .from('applications')
+          .insert([legacyApp])
+          .select()
+          .maybeSingle();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    } catch (insertErr: any) {
+      error = insertErr;
     }
 
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active and not paused.`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error saving application to Supabase: ${error.message}`);
+      if (error.message?.includes('Invalid API key') || error.code === 'PGRST301' || error.message?.includes('JWT')) {
+        throw new Error(`Failed to save application to Supabase: Invalid API key. Please verify that SUPABASE_SERVICE_ROLE_KEY in your Vercel project settings matches your Supabase project.`);
+      }
+      throw new Error(`Database error saving application to Supabase: ${error.message || error}`);
     }
 
+    markSupabaseHostReachable();
     const saved = normalizeApplication(data || newApp);
 
-    // Keep local cache synchronized
+    // Keep local cache synchronized with Supabase
     const apps = readLocalApps();
     apps.unshift(saved);
     writeLocalApps(apps);
+
     return saved;
   }
 
-  // If running in production or on Vercel without Supabase configured, fail fast with diagnostics
-  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-    const diag = getSupabaseDiagnostics();
-    throw new Error(`Application cannot be saved: Supabase database is not configured in this production environment. ${diag.summary}`);
-  }
-
-  // Pure offline local development only (when Supabase credentials are not provided)
+  // Pure offline local development only (when Supabase credentials are not configured)
   const apps = readLocalApps();
   apps.unshift(newApp);
   writeLocalApps(apps);
@@ -423,41 +489,56 @@ export async function updateApplication(id: string, updates: Partial<Application
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured) {
-    if (!supabase) {
-      const diag = getSupabaseDiagnostics();
-      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
+  if (isConfigured && supabase) {
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
     }
 
-    let { data, error } = await supabase
-      .from('applications')
-      .update(sanitizedUpdates)
-      .eq('id', id)
-      .select()
-      .maybeSingle();
+    let data: any = null;
+    let error: any = null;
 
-    if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
-      const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
-      const retryRes = await supabase
+    try {
+      const res = await supabase
         .from('applications')
-        .update(legacyUpdates)
+        .update(sanitizedUpdates)
         .eq('id', id)
         .select()
         .maybeSingle();
-      data = retryRes.data;
-      error = retryRes.error;
+      data = res.data;
+      error = res.error;
+
+      if (error && (error.code === '42703' || error.message?.includes('google_drive_url'))) {
+        const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
+        const retryRes = await supabase
+          .from('applications')
+          .update(legacyUpdates)
+          .eq('id', id)
+          .select()
+          .maybeSingle();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    } catch (updateErr: any) {
+      error = updateErr;
     }
 
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active.`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error updating application in Supabase: ${error.message}`);
+      if (error.message?.includes('Invalid API key') || error.code === 'PGRST301' || error.message?.includes('JWT')) {
+        throw new Error(`Failed to update/publish application in Supabase: Invalid API key. Please verify that SUPABASE_SERVICE_ROLE_KEY in your Vercel project settings matches your Supabase project.`);
+      }
+      throw new Error(`Database error updating application in Supabase: ${error.message || error}`);
     }
 
+    markSupabaseHostReachable();
     const updated = normalizeApplication(data || { id, ...sanitizedUpdates });
 
+    // Keep local cache synchronized with Supabase
     const apps = readLocalApps();
     const index = apps.findIndex(a => a.id === id);
     if (index !== -1) {
@@ -466,10 +547,11 @@ export async function updateApplication(id: string, updates: Partial<Application
       apps.unshift(updated);
     }
     writeLocalApps(apps);
+
     return updated;
   }
 
-  // Pure offline fallback
+  // Pure offline fallback (when Supabase is not configured)
   const apps = readLocalApps();
   const index = apps.findIndex(a => a.id === id);
   if (index === -1) {
@@ -488,27 +570,41 @@ export async function deleteApplication(id: string): Promise<Application> {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
 
-  if (isConfigured) {
-    if (!supabase) {
-      const diag = getSupabaseDiagnostics();
-      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
+  if (isConfigured && supabase) {
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
     }
 
-    const { data, error } = await supabase
-      .from('applications')
-      .delete()
-      .eq('id', id)
-      .select()
-      .maybeSingle();
+    let data: any = null;
+    let error: any = null;
+
+    try {
+      const res = await supabase
+        .from('applications')
+        .delete()
+        .eq('id', id)
+        .select()
+        .maybeSingle();
+      data = res.data;
+      error = res.error;
+    } catch (delErr: any) {
+      error = delErr;
+    }
 
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}).`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error deleting application from Supabase: ${error.message}`);
+      if (error.message?.includes('Invalid API key') || error.code === 'PGRST301' || error.message?.includes('JWT')) {
+        throw new Error(`Failed to delete application from Supabase: Invalid API key. Please check SUPABASE_SERVICE_ROLE_KEY in Vercel.`);
+      }
+      throw new Error(`Database error deleting application from Supabase: ${error.message || error}`);
     }
 
+    markSupabaseHostReachable();
     const apps = readLocalApps();
     const index = apps.findIndex(a => a.id === id);
     if (index !== -1) {
@@ -530,20 +626,42 @@ export async function deleteApplication(id: string): Promise<Application> {
 }
 
 export async function incrementDownloadCount(id: string): Promise<number> {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
-    // Call the atomic stored procedure from migration
-    const { data, error } = await supabase.rpc('increment_app_downloads', { target_app_id: id });
-    if (!error && data !== null) {
-      return Number(data);
+
+  if (isConfigured && supabase) {
+    try {
+      // Call the atomic stored procedure from migration
+      const { data, error } = await supabase.rpc('increment_app_downloads', { target_app_id: id });
+      if (!error && data !== null) {
+        const count = Number(data);
+        const apps = readLocalApps();
+        const local = apps.find(a => a.id === id);
+        if (local) {
+          local.downloads_count = count;
+          writeLocalApps(apps);
+        }
+        return count;
+      }
+      if (error && isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+      } else if (error) {
+        // Fallback to updateApplication if procedure not created yet
+        try {
+          const app = await getApplicationById(id);
+          if (app) {
+            const updated = await updateApplication(id, { downloads_count: (app.downloads_count || 0) + 1 });
+            return updated.downloads_count;
+          }
+        } catch {
+          // Ignore Supabase update error and fall through to local
+        }
+      }
+    } catch (err: any) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err?.message);
+      }
     }
-    // Fallback if procedure not created yet
-    const app = await getApplicationById(id);
-    if (app) {
-      const updated = await updateApplication(id, { downloads_count: (app.downloads_count || 0) + 1 });
-      return updated.downloads_count;
-    }
-    return 0;
   }
 
   const apps = readLocalApps();
@@ -558,19 +676,20 @@ export async function incrementDownloadCount(id: string): Promise<number> {
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
-  const { applications: allApps } = await listApplications({ status: 'all', limit: 1000 });
+  const { applications: allApps, total } = await listApplications({ status: 'all', limit: 1000 });
+  const safeApps = Array.isArray(allApps) ? allApps : [];
 
-  const totalApps = allApps.length;
-  const publishedApps = allApps.filter(a => a.status === 'published').length;
-  const draftApps = allApps.filter(a => a.status === 'draft').length;
-  const totalDownloads = allApps.reduce((sum, a) => sum + (a.downloads_count || 0), 0);
+  const totalApps = total !== undefined && total !== null ? total : safeApps.length;
+  const publishedApps = safeApps.filter(a => a && a.status === 'published').length;
+  const draftApps = safeApps.filter(a => a && a.status === 'draft').length;
+  const totalDownloads = safeApps.reduce((sum, a) => sum + (Number(a?.downloads_count) || 0), 0);
 
-  const recentlyAdded = [...allApps]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const recentlyAdded = [...safeApps]
+    .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
     .slice(0, 5);
 
-  const recentlyUpdated = [...allApps]
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  const recentlyUpdated = [...safeApps]
+    .sort((a, b) => new Date(b?.updated_at || b?.created_at || 0).getTime() - new Date(a?.updated_at || a?.created_at || 0).getTime())
     .slice(0, 5);
 
   return {

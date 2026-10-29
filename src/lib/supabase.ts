@@ -64,12 +64,17 @@ export function normalizeSupabaseKey(rawKey?: string): string {
     'SUPABASE_PUBLISHABLE_KEY=',
     'VITE_SUPABASE_PUBLISHABLE_KEY=',
     'SUPABASE_PUBLIC_KEY=',
+    'SERVICE_ROLE_KEY=',
+    'ANON_KEY=',
   ];
   for (const prefix of keyPrefixes) {
     if (cleaned.startsWith(prefix)) {
       cleaned = cleaned.slice(prefix.length).trim();
     }
   }
+
+  // Strip leading Bearer keyword if accidentally included
+  cleaned = cleaned.replace(/^Bearer\s+/i, '').trim();
 
   // Strip wrapping quotes and semicolons
   cleaned = cleaned.replace(/^["']|["']$/g, '').trim();
@@ -90,6 +95,7 @@ export function getSupabaseUrl(): string {
       process.env.VITE_SUPABASE_URL ||
       process.env.NEXT_PUBLIC_SUPABASE_URL ||
       process.env.SUPABASE_PROJECT_URL ||
+      process.env.SUPABASE_HOST ||
       '';
   }
 
@@ -121,6 +127,7 @@ export function getSupabaseAnonKey(): string {
       process.env.SUPABASE_PUBLISHABLE_KEY ||
       process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
       process.env.SUPABASE_PUBLIC_KEY ||
+      process.env.ANON_KEY ||
       '';
   }
 
@@ -157,6 +164,9 @@ export function getSupabaseServiceRoleKey(): string {
       process.env.SUPABASE_SERVICE_KEY ||
       process.env.SUPABASE_SECRET_KEY ||
       process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE ||
+      process.env.SUPABASE_SECRET ||
       '';
   }
 
@@ -238,16 +248,23 @@ export function getSupabaseDiagnostics(): SupabaseDiagnostics {
  */
 export function isDnsOrNetworkError(err: any): boolean {
   if (!err) return false;
-  const msg = typeof err === 'string'
+  const msg = (typeof err === 'string'
     ? err
-    : `${err.message || ''} ${err.details || ''} ${err.code || ''} ${JSON.stringify(err)}`;
+    : `${err.message || ''} ${err.details || ''} ${err.code || ''} ${err.statusText || ''} ${JSON.stringify(err)}`).toLowerCase();
   return (
-    msg.includes('ENOTFOUND') ||
+    msg.includes('enotfound') ||
     msg.includes('getaddrinfo') ||
     msg.includes('fetch failed') ||
-    msg.includes('ECONNREFUSED') ||
-    msg.includes('ETIMEDOUT') ||
-    msg.includes('UND_ERR_CONNECT_TIMEOUT')
+    msg.includes('failed to fetch') ||
+    msg.includes('econnrefused') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('timeout') ||
+    msg.includes('und_err_connect_timeout') ||
+    msg.includes('networkerror') ||
+    msg.includes('network error') ||
+    msg.includes('socket hang up') ||
+    msg.includes('cannot connect to supabase database host')
   );
 }
 
@@ -279,6 +296,17 @@ export function isSupabaseConfigured(): boolean {
 export function isSupabaseConnected(): boolean {
   if (!isSupabaseConfigured()) return false;
   return lastVerifiedConnected === true;
+}
+
+/**
+ * Returns true if the host recently failed connection/DNS within cooldown window (30s)
+ * preventing costly 15-second blocking timeouts on consecutive user requests.
+ */
+export function isSupabaseHostKnownUnreachable(): boolean {
+  if (lastVerifiedConnected === false && Date.now() - lastVerifiedTime < 30000) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -329,11 +357,12 @@ export async function verifySupabaseConnection(): Promise<{
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
+        const host = getSupabaseDiagnostics().urlHost;
         return {
           connected: false,
           configured: true,
           url: getSupabaseUrl(),
-          error: `Supabase host unreachable (${error.message}). If using the Free tier, please verify in the Supabase Dashboard that your project is not paused.`,
+          error: `Cannot connect to Supabase database host (TypeError: fetch failed). The host "${host}" does not resolve in DNS. Please verify in your Supabase Dashboard that your project is active and update SUPABASE_URL in Vercel.`,
         };
       }
       lastVerifiedConnected = false;
@@ -354,15 +383,21 @@ export async function verifySupabaseConnection(): Promise<{
     };
   } catch (err: any) {
     lastVerifiedTime = Date.now();
+    const host = getSupabaseDiagnostics().urlHost;
     markSupabaseHostUnreachable(err?.message);
     return {
       connected: false,
       configured: true,
       url: getSupabaseUrl(),
-      error: `Supabase connection failed: ${err?.message || 'Network failure'}`,
+      error: `Cannot connect to Supabase database host (TypeError: fetch failed). The host "${host}" does not resolve in DNS. Please verify in your Supabase Dashboard that your project is active and update SUPABASE_URL in Vercel.`,
     };
   }
 }
+
+let cachedBrowserUrl = '';
+let cachedBrowserKey = '';
+let cachedServerUrl = '';
+let cachedServerKey = '';
 
 /**
  * Returns the client-side Supabase client using ONLY public anon credentials.
@@ -376,7 +411,7 @@ export function getSupabaseClient(): SupabaseClient | null {
     return null;
   }
 
-  if (!browserClient) {
+  if (!browserClient || url !== cachedBrowserUrl || anonKey !== cachedBrowserKey) {
     try {
       browserClient = createClient(url, anonKey, {
         auth: {
@@ -385,6 +420,8 @@ export function getSupabaseClient(): SupabaseClient | null {
           detectSessionInUrl: true,
         },
       });
+      cachedBrowserUrl = url;
+      cachedBrowserKey = anonKey;
       lastClientInitError = null;
     } catch (err: any) {
       lastClientInitError = err?.message || 'Failed to create browser Supabase client';
@@ -409,7 +446,7 @@ export function getServerSupabaseClient(): SupabaseClient | null {
     return null;
   }
 
-  if (!serverClient) {
+  if (!serverClient || projectUrl !== cachedServerUrl || key !== cachedServerKey) {
     try {
       serverClient = createClient(projectUrl, key, {
         auth: {
@@ -417,6 +454,8 @@ export function getServerSupabaseClient(): SupabaseClient | null {
           autoRefreshToken: false,
         },
       });
+      cachedServerUrl = projectUrl;
+      cachedServerKey = key;
       lastClientInitError = null;
     } catch (err: any) {
       lastClientInitError = err?.message || 'Failed to initialize server Supabase client';

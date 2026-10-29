@@ -103,7 +103,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
               {supabaseConnected
                 ? 'Supabase Live'
                 : supabaseConfigured
-                ? 'Supabase Paused'
+                ? 'Supabase Disconnected'
                 : 'Local Store'}
             </span>
           </div>

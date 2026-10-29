@@ -1,4 +1,5 @@
 // src/server/app.ts
+import "dotenv/config";
 import express from "express";
 
 // src/server/services/database.ts
@@ -9,17 +10,26 @@ import path from "path";
 import { createClient } from "@supabase/supabase-js";
 function normalizeSupabaseUrl(rawUrl) {
   if (!rawUrl) return "";
-  let cleaned = String(rawUrl).trim();
-  if (cleaned.startsWith("VITE_SUPABASE_URL=")) {
-    cleaned = cleaned.replace(/^VITE_SUPABASE_URL=/, "").trim();
-  }
-  if (cleaned.startsWith("SUPABASE_URL=")) {
-    cleaned = cleaned.replace(/^SUPABASE_URL=/, "").trim();
+  let cleaned = String(rawUrl).trim().replace(/[\r\n\t]/g, "");
+  const prefixes = [
+    "VITE_SUPABASE_URL=",
+    "SUPABASE_URL=",
+    "NEXT_PUBLIC_SUPABASE_URL=",
+    "SUPABASE_PROJECT_URL="
+  ];
+  for (const prefix of prefixes) {
+    if (cleaned.startsWith(prefix)) {
+      cleaned = cleaned.slice(prefix.length).trim();
+    }
   }
   cleaned = cleaned.replace(/^["']|["']$/g, "").trim();
+  cleaned = cleaned.replace(/;$/, "").trim();
   cleaned = cleaned.replace(/\/rest\/v1\/?$/, "");
   cleaned = cleaned.replace(/\/rest\/?$/, "");
   cleaned = cleaned.replace(/\/+$/, "");
+  if (cleaned && !/^https?:\/\//i.test(cleaned)) {
+    cleaned = `https://${cleaned}`;
+  }
   try {
     const parsed = new URL(cleaned);
     return parsed.origin;
@@ -29,50 +39,120 @@ function normalizeSupabaseUrl(rawUrl) {
 }
 function normalizeSupabaseKey(rawKey) {
   if (!rawKey) return "";
-  let cleaned = String(rawKey).trim();
-  if (cleaned.startsWith("VITE_SUPABASE_ANON_KEY=")) {
-    cleaned = cleaned.replace(/^VITE_SUPABASE_ANON_KEY=/, "").trim();
+  let cleaned = String(rawKey).trim().replace(/[\r\n\t]/g, "");
+  const keyPrefixes = [
+    "VITE_SUPABASE_ANON_KEY=",
+    "SUPABASE_ANON_KEY=",
+    "SUPABASE_KEY=",
+    "SUPABASE_SERVICE_ROLE_KEY=",
+    "SUPABASE_SERVICE_KEY=",
+    "SUPABASE_SECRET_KEY=",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY=",
+    "SUPABASE_PUBLISHABLE_KEY=",
+    "VITE_SUPABASE_PUBLISHABLE_KEY=",
+    "SUPABASE_PUBLIC_KEY=",
+    "SERVICE_ROLE_KEY=",
+    "ANON_KEY="
+  ];
+  for (const prefix of keyPrefixes) {
+    if (cleaned.startsWith(prefix)) {
+      cleaned = cleaned.slice(prefix.length).trim();
+    }
   }
-  if (cleaned.startsWith("SUPABASE_SERVICE_ROLE_KEY=")) {
-    cleaned = cleaned.replace(/^SUPABASE_SERVICE_ROLE_KEY=/, "").trim();
-  }
-  return cleaned.replace(/^["']|["']$/g, "").trim();
+  cleaned = cleaned.replace(/^Bearer\s+/i, "").trim();
+  cleaned = cleaned.replace(/^["']|["']$/g, "").trim();
+  cleaned = cleaned.replace(/;.*$/, "").trim();
+  return cleaned;
 }
 function getSupabaseUrl() {
-  const raw = typeof process !== "undefined" && (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL) || typeof import.meta !== "undefined" && (import.meta.env?.VITE_SUPABASE_URL || import.meta.env?.SUPABASE_URL) || "";
+  let raw = "";
+  if (typeof process !== "undefined" && process.env) {
+    raw = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || process.env.SUPABASE_HOST || "";
+  }
+  if (!raw && typeof import.meta !== "undefined" && import.meta.env) {
+    raw = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || import.meta.env.SUPABASE_PROJECT_URL || "";
+  }
   return normalizeSupabaseUrl(raw);
 }
 function getSupabaseAnonKey() {
-  const raw = typeof process !== "undefined" && (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY) || typeof import.meta !== "undefined" && (import.meta.env?.VITE_SUPABASE_ANON_KEY || import.meta.env?.SUPABASE_ANON_KEY) || "";
+  let raw = "";
+  if (typeof process !== "undefined" && process.env) {
+    raw = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLIC_KEY || process.env.ANON_KEY || "";
+  }
+  if (!raw && typeof import.meta !== "undefined" && import.meta.env) {
+    raw = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_KEY || import.meta.env.SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.SUPABASE_PUBLIC_KEY || "";
+  }
   return normalizeSupabaseKey(raw);
 }
 function getSupabaseServiceRoleKey() {
-  const raw = typeof process !== "undefined" && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY) || "";
+  if (typeof window !== "undefined") {
+    return "";
+  }
+  let raw = "";
+  if (typeof process !== "undefined" && process.env) {
+    raw = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SECRET || "";
+  }
   return normalizeSupabaseKey(raw);
 }
 var serverClient = null;
-var supabaseHostReachable = true;
-var lastReachabilityCheck = 0;
-var RETRY_INTERVAL_MS = 6e4;
+var lastClientInitError = null;
 var lastVerifiedConnected = null;
 var lastVerifiedError = null;
 var lastVerifiedTime = 0;
 var VERIFY_CACHE_TTL_MS = 15e3;
+function getSupabaseDiagnostics() {
+  const url = getSupabaseUrl();
+  const anon = getSupabaseAnonKey();
+  const service = getSupabaseServiceRoleKey();
+  const missingVariables = [];
+  if (!url) missingVariables.push("SUPABASE_URL (or VITE_SUPABASE_URL)");
+  if (!anon && !service) {
+    missingVariables.push("SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY) or SUPABASE_SERVICE_ROLE_KEY");
+  }
+  let urlHost = "";
+  try {
+    if (url) urlHost = new URL(url).host;
+  } catch {
+    urlHost = url;
+  }
+  const isConfigured = Boolean(url && (anon || service) && !url.includes("your-project-ref"));
+  let summary = "";
+  if (!isConfigured) {
+    if (url.includes("your-project-ref")) {
+      summary = 'Supabase URL contains placeholder "your-project-ref". Please enter your real Supabase project URL.';
+    } else {
+      summary = `Missing required Supabase environment keys: ${missingVariables.join(", ")}.`;
+    }
+  } else if (lastClientInitError) {
+    summary = `Supabase client initialization error: ${lastClientInitError}`;
+  } else {
+    summary = `Configured for project ${urlHost} (${service ? "Service Role Key active" : "Anon Key active"}).`;
+  }
+  return {
+    isConfigured,
+    hasUrl: Boolean(url),
+    hasAnonKey: Boolean(anon),
+    hasServiceRoleKey: Boolean(service),
+    urlHost,
+    missingVariables,
+    clientInitError: lastClientInitError,
+    summary
+  };
+}
 function isDnsOrNetworkError(err) {
   if (!err) return false;
-  const msg = typeof err === "string" ? err : `${err.message || ""} ${err.details || ""} ${err.code || ""} ${JSON.stringify(err)}`;
-  return msg.includes("ENOTFOUND") || msg.includes("getaddrinfo") || msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
+  const msg = (typeof err === "string" ? err : `${err.message || ""} ${err.details || ""} ${err.code || ""} ${err.statusText || ""} ${JSON.stringify(err)}`).toLowerCase();
+  return msg.includes("enotfound") || msg.includes("getaddrinfo") || msg.includes("fetch failed") || msg.includes("failed to fetch") || msg.includes("econnrefused") || msg.includes("econnreset") || msg.includes("etimedout") || msg.includes("timeout") || msg.includes("und_err_connect_timeout") || msg.includes("networkerror") || msg.includes("network error") || msg.includes("socket hang up") || msg.includes("cannot connect to supabase database host");
 }
 function markSupabaseHostUnreachable(errorReason) {
-  supabaseHostReachable = false;
   lastVerifiedConnected = false;
   lastVerifiedError = errorReason || "Host unreachable";
-  lastReachabilityCheck = Date.now();
+  lastVerifiedTime = Date.now();
 }
 function markSupabaseHostReachable() {
-  supabaseHostReachable = true;
   lastVerifiedConnected = true;
   lastVerifiedError = null;
+  lastVerifiedTime = Date.now();
 }
 function isSupabaseConfigured() {
   const url = getSupabaseUrl();
@@ -80,13 +160,20 @@ function isSupabaseConfigured() {
   const service = getSupabaseServiceRoleKey();
   return Boolean(url && (anon || service) && !url.includes("your-project-ref"));
 }
+function isSupabaseHostKnownUnreachable() {
+  if (lastVerifiedConnected === false && Date.now() - lastVerifiedTime < 3e4) {
+    return true;
+  }
+  return false;
+}
 async function verifySupabaseConnection() {
   if (!isSupabaseConfigured()) {
+    const diag = getSupabaseDiagnostics();
     return {
       connected: false,
       configured: false,
       url: "",
-      error: "Supabase credentials are not configured in environment variables."
+      error: diag.summary
     };
   }
   if (lastVerifiedTime > 0 && Date.now() - lastVerifiedTime < VERIFY_CACHE_TTL_MS && lastVerifiedConnected !== null) {
@@ -100,7 +187,7 @@ async function verifySupabaseConnection() {
   const client = getServerSupabaseClient();
   if (!client) {
     lastVerifiedConnected = false;
-    lastVerifiedError = "Failed to initialize Supabase client with provided credentials.";
+    lastVerifiedError = lastClientInitError || "Failed to initialize Supabase client with provided credentials.";
     lastVerifiedTime = Date.now();
     return {
       connected: false,
@@ -115,11 +202,12 @@ async function verifySupabaseConnection() {
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
+        const host = getSupabaseDiagnostics().urlHost;
         return {
           connected: false,
           configured: true,
           url: getSupabaseUrl(),
-          error: `Supabase host unreachable (${error.message}). If using the Free tier, please verify in the Supabase Dashboard that your project is not paused.`
+          error: `Cannot connect to Supabase database host (TypeError: fetch failed). The host "${host}" does not resolve in DNS. Please verify in your Supabase Dashboard that your project is active and update SUPABASE_URL in Vercel.`
         };
       }
       lastVerifiedConnected = false;
@@ -140,28 +228,25 @@ async function verifySupabaseConnection() {
     };
   } catch (err) {
     lastVerifiedTime = Date.now();
+    const host = getSupabaseDiagnostics().urlHost;
     markSupabaseHostUnreachable(err?.message);
     return {
       connected: false,
       configured: true,
       url: getSupabaseUrl(),
-      error: `Supabase connection failed: ${err?.message || "Network failure"}`
+      error: `Cannot connect to Supabase database host (TypeError: fetch failed). The host "${host}" does not resolve in DNS. Please verify in your Supabase Dashboard that your project is active and update SUPABASE_URL in Vercel.`
     };
   }
 }
+var cachedServerUrl = "";
+var cachedServerKey = "";
 function getServerSupabaseClient() {
   const projectUrl = getSupabaseUrl();
   const key = getSupabaseServiceRoleKey() || getSupabaseAnonKey();
   if (!projectUrl || !key || projectUrl.includes("your-project-ref")) {
     return null;
   }
-  if (!supabaseHostReachable) {
-    if (Date.now() - lastReachabilityCheck < RETRY_INTERVAL_MS) {
-      return null;
-    }
-    supabaseHostReachable = true;
-  }
-  if (!serverClient) {
+  if (!serverClient || projectUrl !== cachedServerUrl || key !== cachedServerKey) {
     try {
       serverClient = createClient(projectUrl, key, {
         auth: {
@@ -169,7 +254,12 @@ function getServerSupabaseClient() {
           autoRefreshToken: false
         }
       });
-    } catch {
+      cachedServerUrl = projectUrl;
+      cachedServerKey = key;
+      lastClientInitError = null;
+    } catch (err) {
+      lastClientInitError = err?.message || "Failed to initialize server Supabase client";
+      console.error("Server Supabase client creation error:", lastClientInitError);
       return null;
     }
   }
@@ -396,10 +486,42 @@ function normalizeApplication(row) {
     published_at: row.published_at || (row.status === "published" ? row.created_at : null)
   };
 }
+var hasSyncedExistingData = false;
+async function syncExistingLocalDataToSupabase(supabase) {
+  if (hasSyncedExistingData || isSupabaseHostKnownUnreachable()) return;
+  try {
+    const localApps = readLocalApps();
+    if (localApps.length === 0) {
+      hasSyncedExistingData = true;
+      return;
+    }
+    const { count, error } = await supabase.from("applications").select("*", { count: "exact", head: true });
+    if (!error && count === 0) {
+      console.log(`[Database] Preserving existing data: seeding ${localApps.length} local application(s) into Supabase...`);
+      for (const app2 of localApps) {
+        try {
+          await supabase.from("applications").upsert(app2);
+        } catch {
+        }
+      }
+    }
+    hasSyncedExistingData = true;
+  } catch {
+  }
+}
 async function listApplications(options = {}) {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (isConfigured && supabase) {
+  if (isConfigured) {
+    if (!supabase) {
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
+    }
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+    }
+    await syncExistingLocalDataToSupabase(supabase);
     try {
       let query = supabase.from("applications").select("*", { count: "exact" });
       if (options.status && options.status !== "all") {
@@ -439,10 +561,15 @@ async function listApplications(options = {}) {
       if (error) {
         if (isDnsOrNetworkError(error)) {
           markSupabaseHostUnreachable(error.message);
-          return getFallbackLocalApplications(options);
+          const host = getSupabaseDiagnostics().urlHost;
+          throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+        }
+        if (error.message?.includes("Invalid API key") || error.code === "PGRST301" || error.message?.includes("JWT")) {
+          throw new Error(`Supabase authentication failed (Invalid API key). Please verify that SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY in Vercel match your Supabase project.`);
         }
         throw new Error(`Database query failed: ${error.message}`);
       }
+      markSupabaseHostReachable();
       const normalizedApps = (data || []).map(normalizeApplication);
       return {
         applications: normalizedApps,
@@ -451,7 +578,8 @@ async function listApplications(options = {}) {
     } catch (err) {
       if (isDnsOrNetworkError(err)) {
         markSupabaseHostUnreachable(err?.message);
-        return getFallbackLocalApplications(options);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
       throw err;
     }
@@ -501,7 +629,7 @@ function getFallbackLocalApplications(options = {}) {
 async function getApplicationBySlug(slug) {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (isConfigured && supabase) {
+  if (isConfigured && supabase && !isSupabaseHostKnownUnreachable()) {
     try {
       const { data, error } = await supabase.from("applications").select("*").eq("slug", slug).maybeSingle();
       if (error) {
@@ -527,7 +655,7 @@ async function getApplicationBySlug(slug) {
 async function getApplicationById(id) {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (isConfigured && supabase) {
+  if (isConfigured && supabase && !isSupabaseHostKnownUnreachable()) {
     try {
       const { data, error } = await supabase.from("applications").select("*").eq("id", id).maybeSingle();
       if (error) {
@@ -573,22 +701,40 @@ async function createApplication(appData) {
   };
   if (isConfigured) {
     if (!supabase) {
-      throw new Error("Supabase database client could not be initialized with configured environment keys.");
+      const diag = getSupabaseDiagnostics();
+      throw new Error(`Database client initialization error: ${diag.clientInitError || diag.summary}`);
     }
-    let { data, error } = await supabase.from("applications").insert([newApp]).select().maybeSingle();
-    if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
-      const { google_drive_url, ...legacyApp } = newApp;
-      const retryRes = await supabase.from("applications").insert([legacyApp]).select().maybeSingle();
-      data = retryRes.data;
-      error = retryRes.error;
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
+    }
+    let data = null;
+    let error = null;
+    try {
+      const res = await supabase.from("applications").insert([newApp]).select().maybeSingle();
+      data = res.data;
+      error = res.error;
+      if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
+        const { google_drive_url, ...legacyApp } = newApp;
+        const retryRes = await supabase.from("applications").insert([legacyApp]).select().maybeSingle();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    } catch (insertErr) {
+      error = insertErr;
     }
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active and not paused.`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error saving application to Supabase: ${error.message}`);
+      if (error.message?.includes("Invalid API key") || error.code === "PGRST301" || error.message?.includes("JWT")) {
+        throw new Error(`Failed to save application to Supabase: Invalid API key. Please verify that SUPABASE_SERVICE_ROLE_KEY in your Vercel project settings matches your Supabase project.`);
+      }
+      throw new Error(`Database error saving application to Supabase: ${error.message || error}`);
     }
+    markSupabaseHostReachable();
     const saved = normalizeApplication(data || newApp);
     const apps2 = readLocalApps();
     apps2.unshift(saved);
@@ -611,24 +757,38 @@ async function updateApplication(id, updates) {
   }
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (isConfigured) {
-    if (!supabase) {
-      throw new Error("Supabase database client could not be initialized with configured environment keys.");
+  if (isConfigured && supabase) {
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
     }
-    let { data, error } = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().maybeSingle();
-    if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
-      const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
-      const retryRes = await supabase.from("applications").update(legacyUpdates).eq("id", id).select().maybeSingle();
-      data = retryRes.data;
-      error = retryRes.error;
+    let data = null;
+    let error = null;
+    try {
+      const res = await supabase.from("applications").update(sanitizedUpdates).eq("id", id).select().maybeSingle();
+      data = res.data;
+      error = res.error;
+      if (error && (error.code === "42703" || error.message?.includes("google_drive_url"))) {
+        const { google_drive_url, ...legacyUpdates } = sanitizedUpdates;
+        const retryRes = await supabase.from("applications").update(legacyUpdates).eq("id", id).select().maybeSingle();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    } catch (updateErr) {
+      error = updateErr;
     }
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}). Please verify in your Supabase Dashboard that your project is active.`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error updating application in Supabase: ${error.message}`);
+      if (error.message?.includes("Invalid API key") || error.code === "PGRST301" || error.message?.includes("JWT")) {
+        throw new Error(`Failed to update/publish application in Supabase: Invalid API key. Please verify that SUPABASE_SERVICE_ROLE_KEY in your Vercel project settings matches your Supabase project.`);
+      }
+      throw new Error(`Database error updating application in Supabase: ${error.message || error}`);
     }
+    markSupabaseHostReachable();
     const updated = normalizeApplication(data || { id, ...sanitizedUpdates });
     const apps2 = readLocalApps();
     const index2 = apps2.findIndex((a) => a.id === id);
@@ -655,18 +815,32 @@ async function updateApplication(id, updates) {
 async function deleteApplication(id) {
   const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (isConfigured) {
-    if (!supabase) {
-      throw new Error("Supabase database client unavailable.");
+  if (isConfigured && supabase) {
+    if (isSupabaseHostKnownUnreachable()) {
+      const host = getSupabaseDiagnostics().urlHost;
+      throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
     }
-    const { data, error } = await supabase.from("applications").delete().eq("id", id).select().maybeSingle();
+    let data = null;
+    let error = null;
+    try {
+      const res = await supabase.from("applications").delete().eq("id", id).select().maybeSingle();
+      data = res.data;
+      error = res.error;
+    } catch (delErr) {
+      error = delErr;
+    }
     if (error) {
       if (isDnsOrNetworkError(error)) {
         markSupabaseHostUnreachable(error.message);
-        throw new Error(`Cannot connect to Supabase database host (${error.message}).`);
+        const host = getSupabaseDiagnostics().urlHost;
+        throw new Error(`Cannot connect to Supabase database host (TypeError: fetch failed). Host "${host}" does not resolve. Please verify that your Supabase project is active and that SUPABASE_URL in Vercel matches your current project.`);
       }
-      throw new Error(`Database error deleting application from Supabase: ${error.message}`);
+      if (error.message?.includes("Invalid API key") || error.code === "PGRST301" || error.message?.includes("JWT")) {
+        throw new Error(`Failed to delete application from Supabase: Invalid API key. Please check SUPABASE_SERVICE_ROLE_KEY in Vercel.`);
+      }
+      throw new Error(`Database error deleting application from Supabase: ${error.message || error}`);
     }
+    markSupabaseHostReachable();
     const apps2 = readLocalApps();
     const index2 = apps2.findIndex((a) => a.id === id);
     if (index2 !== -1) {
@@ -686,18 +860,38 @@ async function deleteApplication(id) {
   return removed;
 }
 async function incrementDownloadCount(id) {
+  const isConfigured = isSupabaseConfigured();
   const supabase = getServerSupabaseClient();
-  if (supabase) {
-    const { data, error } = await supabase.rpc("increment_app_downloads", { target_app_id: id });
-    if (!error && data !== null) {
-      return Number(data);
+  if (isConfigured && supabase) {
+    try {
+      const { data, error } = await supabase.rpc("increment_app_downloads", { target_app_id: id });
+      if (!error && data !== null) {
+        const count = Number(data);
+        const apps2 = readLocalApps();
+        const local = apps2.find((a) => a.id === id);
+        if (local) {
+          local.downloads_count = count;
+          writeLocalApps(apps2);
+        }
+        return count;
+      }
+      if (error && isDnsOrNetworkError(error)) {
+        markSupabaseHostUnreachable(error.message);
+      } else if (error) {
+        try {
+          const app3 = await getApplicationById(id);
+          if (app3) {
+            const updated = await updateApplication(id, { downloads_count: (app3.downloads_count || 0) + 1 });
+            return updated.downloads_count;
+          }
+        } catch {
+        }
+      }
+    } catch (err) {
+      if (isDnsOrNetworkError(err)) {
+        markSupabaseHostUnreachable(err?.message);
+      }
     }
-    const app3 = await getApplicationById(id);
-    if (app3) {
-      const updated = await updateApplication(id, { downloads_count: (app3.downloads_count || 0) + 1 });
-      return updated.downloads_count;
-    }
-    return 0;
   }
   const apps = readLocalApps();
   const app2 = apps.find((a) => a.id === id);
@@ -710,13 +904,14 @@ async function incrementDownloadCount(id) {
   return 0;
 }
 async function getDashboardStats() {
-  const { applications: allApps } = await listApplications({ status: "all", limit: 1e3 });
-  const totalApps = allApps.length;
-  const publishedApps = allApps.filter((a) => a.status === "published").length;
-  const draftApps = allApps.filter((a) => a.status === "draft").length;
-  const totalDownloads = allApps.reduce((sum, a) => sum + (a.downloads_count || 0), 0);
-  const recentlyAdded = [...allApps].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 5);
-  const recentlyUpdated = [...allApps].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 5);
+  const { applications: allApps, total } = await listApplications({ status: "all", limit: 1e3 });
+  const safeApps = Array.isArray(allApps) ? allApps : [];
+  const totalApps = total !== void 0 && total !== null ? total : safeApps.length;
+  const publishedApps = safeApps.filter((a) => a && a.status === "published").length;
+  const draftApps = safeApps.filter((a) => a && a.status === "draft").length;
+  const totalDownloads = safeApps.reduce((sum, a) => sum + (Number(a?.downloads_count) || 0), 0);
+  const recentlyAdded = [...safeApps].sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime()).slice(0, 5);
+  const recentlyUpdated = [...safeApps].sort((a, b) => new Date(b?.updated_at || b?.created_at || 0).getTime() - new Date(a?.updated_at || a?.created_at || 0).getTime()).slice(0, 5);
   return {
     totalApps,
     publishedApps,
@@ -1134,12 +1329,14 @@ async function requireAdmin(req, res, next) {
 }
 app.get("/api/health", async (req, res) => {
   const supabaseStatus = await verifySupabaseConnection();
+  const diagnostics = getSupabaseDiagnostics();
   sendSuccess(res, {
     status: supabaseStatus.connected ? "healthy" : supabaseStatus.configured ? "degraded" : "local",
     product: "WinterBuilds",
     supabaseConnected: supabaseStatus.connected,
     supabaseConfigured: supabaseStatus.configured,
     supabaseError: supabaseStatus.error || null,
+    supabaseDiagnostics: diagnostics.summary,
     storageProvider: supabaseStatus.connected ? "supabase" : "local-resilient",
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
@@ -1172,7 +1369,7 @@ app.get("/api/apps/:slug", async (req, res) => {
     sendSuccess(res, appRecord);
   } catch (err) {
     console.error("Error in GET /api/apps/:slug:", err);
-    sendError(res, 500, "SERVER_ERROR", "Failed to retrieve application details.");
+    sendError(res, 500, "SERVER_ERROR", err.message || "Failed to retrieve application details.");
   }
 });
 app.post("/api/apps/:id/download", async (req, res) => {
@@ -1182,17 +1379,27 @@ app.post("/api/apps/:id/download", async (req, res) => {
     if (!appRecord) {
       return sendError(res, 404, "APP_NOT_FOUND", "Application not found for download.");
     }
-    const newCount = await incrementDownloadCount(id);
+    let newCount = appRecord.downloads_count || 0;
+    try {
+      newCount = await incrementDownloadCount(id);
+    } catch (countErr) {
+      console.warn("Non-fatal: could not increment download counter:", countErr);
+    }
     const isGoogleDrive = Boolean(appRecord.google_drive_url && isValidGoogleDriveUrl(appRecord.google_drive_url));
     let downloadUrl = "";
-    if (isGoogleDrive) {
-      downloadUrl = appRecord.google_drive_url;
-    } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith("/api/")) {
-      downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
-    } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== "google_drive") {
-      downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
-    } else {
-      downloadUrl = appRecord.apk_download_url || "";
+    try {
+      if (isGoogleDrive) {
+        downloadUrl = appRecord.google_drive_url;
+      } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith("/api/")) {
+        downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
+      } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== "google_drive") {
+        downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
+      } else {
+        downloadUrl = appRecord.apk_download_url || "";
+      }
+    } catch (urlErr) {
+      console.warn("Non-fatal: fallback to direct APK download URL:", urlErr);
+      downloadUrl = appRecord.apk_download_url || appRecord.google_drive_url || "";
     }
     const downloadFileName = generateApkDownloadFileName(appRecord.name, appRecord.apk_storage_path || "app.apk");
     sendSuccess(res, {
@@ -1215,6 +1422,7 @@ app.get("/api/admin/status", async (req, res) => {
   const result = await verifyAdminAuthorization(authHeader);
   const passwordConfigured = isAdminPasswordConfigured();
   const supabaseStatus = await verifySupabaseConnection();
+  const diagnostics = getSupabaseDiagnostics();
   sendSuccess(res, {
     authenticated: result.authorized,
     email: result.email || null,
@@ -1222,6 +1430,7 @@ app.get("/api/admin/status", async (req, res) => {
     supabaseConfigured: supabaseStatus.configured,
     supabaseConnected: supabaseStatus.connected,
     supabaseError: supabaseStatus.error || null,
+    supabaseDiagnostics: diagnostics.summary,
     defaultAdminEmail: "winterbuilds99@gmail.com"
   });
 });
@@ -1259,7 +1468,10 @@ app.get("/api/admin/stats", requireAdmin, async (req, res) => {
     sendSuccess(res, stats);
   } catch (err) {
     console.error("Error in GET /api/admin/stats:", err);
-    sendError(res, 500, "SERVER_ERROR", "Failed to calculate dashboard statistics.");
+    const message = err?.message || (typeof err === "string" ? err : "Database error while calculating dashboard statistics.");
+    sendError(res, 500, "SERVER_ERROR", message, {
+      details: err?.details || err?.hint || err?.code || String(err)
+    });
   }
 });
 app.get("/api/admin/apps", requireAdmin, async (req, res) => {
@@ -1276,7 +1488,10 @@ app.get("/api/admin/apps", requireAdmin, async (req, res) => {
     sendSuccess(res, result);
   } catch (err) {
     console.error("Error in GET /api/admin/apps:", err);
-    sendError(res, 500, "SERVER_ERROR", "Failed to retrieve application list.");
+    const message = err?.message || (typeof err === "string" ? err : "Database error while retrieving application list.");
+    sendError(res, 500, "SERVER_ERROR", message, {
+      details: err?.details || err?.hint || err?.code || String(err)
+    });
   }
 });
 app.post("/api/apps", requireAdmin, async (req, res) => {

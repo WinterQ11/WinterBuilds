@@ -139,7 +139,7 @@ app.get('/api/apps/:slug', async (req, res) => {
     sendSuccess(res, appRecord);
   } catch (err: any) {
     console.error('Error in GET /api/apps/:slug:', err);
-    sendError(res, 500, 'SERVER_ERROR', 'Failed to retrieve application details.');
+    sendError(res, 500, 'SERVER_ERROR', err.message || 'Failed to retrieve application details.');
   }
 });
 
@@ -154,20 +154,30 @@ app.post('/api/apps/:id/download', async (req, res) => {
     }
 
     // Atomic download increment (increments once per click)
-    const newCount = await incrementDownloadCount(id);
+    let newCount = appRecord.downloads_count || 0;
+    try {
+      newCount = await incrementDownloadCount(id);
+    } catch (countErr) {
+      console.warn('Non-fatal: could not increment download counter:', countErr);
+    }
 
     // If Google Drive URL is configured and valid, prefer it over direct storage download
     const isGoogleDrive = Boolean(appRecord.google_drive_url && isValidGoogleDriveUrl(appRecord.google_drive_url));
 
     let downloadUrl = '';
-    if (isGoogleDrive) {
-      downloadUrl = appRecord.google_drive_url!;
-    } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith('/api/')) {
-      downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
-    } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== 'google_drive') {
-      downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
-    } else {
-      downloadUrl = appRecord.apk_download_url || '';
+    try {
+      if (isGoogleDrive) {
+        downloadUrl = appRecord.google_drive_url!;
+      } else if (appRecord.apk_download_url && !appRecord.apk_download_url.startsWith('/api/')) {
+        downloadUrl = formatCleanDownloadUrl(appRecord.apk_download_url, appRecord.apk_storage_path, appRecord.name);
+      } else if (appRecord.apk_storage_path && appRecord.apk_storage_path !== 'google_drive') {
+        downloadUrl = await verifyAndResolveDownloadUrl(appRecord.apk_storage_path, appRecord.name);
+      } else {
+        downloadUrl = appRecord.apk_download_url || '';
+      }
+    } catch (urlErr) {
+      console.warn('Non-fatal: fallback to direct APK download URL:', urlErr);
+      downloadUrl = appRecord.apk_download_url || appRecord.google_drive_url || '';
     }
 
     // Generate intended clean download filename (e.g. "SensiShare.apk" or "My App.apk")
@@ -257,7 +267,10 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
     sendSuccess(res, stats);
   } catch (err: any) {
     console.error('Error in GET /api/admin/stats:', err);
-    sendError(res, 500, 'SERVER_ERROR', 'Failed to calculate dashboard statistics.');
+    const message = err?.message || (typeof err === 'string' ? err : 'Database error while calculating dashboard statistics.');
+    sendError(res, 500, 'SERVER_ERROR', message, {
+      details: err?.details || err?.hint || err?.code || String(err),
+    });
   }
 });
 
@@ -278,7 +291,10 @@ app.get('/api/admin/apps', requireAdmin, async (req, res) => {
     sendSuccess(res, result);
   } catch (err: any) {
     console.error('Error in GET /api/admin/apps:', err);
-    sendError(res, 500, 'SERVER_ERROR', 'Failed to retrieve application list.');
+    const message = err?.message || (typeof err === 'string' ? err : 'Database error while retrieving application list.');
+    sendError(res, 500, 'SERVER_ERROR', message, {
+      details: err?.details || err?.hint || err?.code || String(err),
+    });
   }
 });
 
