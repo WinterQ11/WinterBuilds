@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { Application, AppCategory, UploadProgressInfo } from '../../types';
 import { APP_CATEGORIES } from '../../types';
 import { extractApkMetadata } from '../../lib/apk-parser';
@@ -40,6 +40,19 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
 }) => {
   // Wizard steps: 1: Upload, 2: Details, 3: Preview, 4: Publish
   const [step, setStep] = useState<number>(mode === 'edit' ? 2 : 1);
+  const topAnchorRef = useRef<HTMLDivElement>(null);
+
+  // Automatically scroll modal to the very top when moving between steps (e.g. into Step 2 Details so App Name is immediately visible)
+  useEffect(() => {
+    if (topAnchorRef.current) {
+      const scrollParent = topAnchorRef.current.closest('.overflow-y-auto');
+      if (scrollParent) {
+        scrollParent.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        topAnchorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  }, [step]);
 
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -280,10 +293,11 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
 
   return (
     <div className="rounded-3xl border shadow-lg overflow-hidden bg-[#ffffff] border-[#e2d8c3] dark:bg-[#161412] dark:border-[#27231e]">
+      <div ref={topAnchorRef} />
       {/* Wizard Header & Stepper */}
-      <div className="border-b px-6 py-5 flex items-center justify-between bg-[#f7f1e6] border-[#e2d8c3] dark:bg-[#1b1916] dark:border-[#27231e]">
+      <div className="border-b px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between bg-[#f7f1e6] border-[#e2d8c3] dark:bg-[#1b1916] dark:border-[#27231e]">
         <div>
-          <h2 className="font-extrabold text-lg text-[#1f1914] dark:text-[#f8f5ee]">
+          <h2 className="font-extrabold text-base sm:text-lg text-[#1f1914] dark:text-[#f8f5ee]">
             {mode === 'replace-apk'
               ? `Replace APK for ${existingApp?.name}`
               : mode === 'edit'
@@ -305,7 +319,7 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
       </div>
 
       {/* Steps Indicator */}
-      <div className="flex border-b border-[#e2d8c3] dark:border-[#27231e] text-xs font-semibold">
+      <div className="flex border-b border-[#e2d8c3] dark:border-[#27231e] text-[11px] sm:text-xs font-semibold">
         {[
           { num: 1, label: 'Upload APK' },
           { num: 2, label: 'Details' },
@@ -314,7 +328,7 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
         ].map((s) => (
           <div
             key={s.num}
-            className={`flex-1 py-3 text-center border-r last:border-r-0 transition-colors ${
+            className={`flex-1 py-2.5 sm:py-3 text-center border-r last:border-r-0 transition-colors ${
               step === s.num
                 ? 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-b-2 border-b-amber-600 font-bold'
                 : step > s.num
@@ -328,7 +342,7 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
       </div>
 
       {/* Wizard Body */}
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         {uploadError && (
           <div className="mb-6 p-4 rounded-2xl flex items-center gap-3 text-sm bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300">
             <AlertCircle className="w-5 h-5 shrink-0" />
@@ -878,7 +892,7 @@ export const UploadWizard: React.FC<UploadWizardProps> = ({
       </div>
 
       {/* Wizard Navigation Controls */}
-      <div className="border-t px-6 py-4 flex items-center justify-between bg-[#f8f3ea] border-[#e2d8c3] dark:bg-[#181614] dark:border-[#27231e]">
+      <div className="border-t px-4 sm:px-6 py-4 flex items-center justify-between bg-[#f8f3ea] border-[#e2d8c3] dark:bg-[#181614] dark:border-[#27231e]">
         {step > 1 ? (
           <button
             type="button"

@@ -55,6 +55,17 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
     mode: 'create' | 'edit' | 'replace-apk';
   } | null>(null);
 
+  // Lock body scroll while the upload/edit wizard modal is active to prevent background scroll interference
+  useEffect(() => {
+    if (wizardTarget) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [wizardTarget]);
+
   useEffect(() => {
     loadDashboardData();
   }, []);
@@ -168,7 +179,8 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
   });
 
   return (
-    <div className="flex flex-col md:flex-row min-h-[85vh] rounded-3xl border overflow-hidden shadow-sm bg-[#faf6ef] border-[#e2d8c3] dark:bg-[#121110] dark:border-[#25211c]">
+    <>
+      <div className="flex flex-col md:flex-row min-h-[85vh] rounded-3xl border overflow-hidden shadow-sm bg-[#faf6ef] border-[#e2d8c3] dark:bg-[#121110] dark:border-[#25211c]">
       {/* Admin Navigation Sidebar */}
       <AdminSidebar
         currentTab={currentTab}
@@ -455,20 +467,25 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
           </div>
         )}
       </main>
+      </div>
 
       {/* Multi-Step Upload & Edit Wizard Modal */}
       {wizardTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
-          <div className="w-full max-w-2xl my-8">
-            <UploadWizard
-              existingApp={wizardTarget.app}
-              mode={wizardTarget.mode}
-              onSuccess={(savedApp) => {
-                setApps((prev) => {
-                  const exists = prev.some((a) => a.id === savedApp.id);
-                  return exists
-                    ? prev.map((a) => (a.id === savedApp.id ? savedApp : a))
-                    : [savedApp, ...prev];
+        <div
+          id="admin-upload-wizard-overlay"
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-y-contain bg-black/60 backdrop-blur-xs p-2 sm:p-4 md:p-6"
+        >
+          <div className="min-h-full flex items-start justify-center py-2 sm:py-6">
+            <div className="w-full max-w-2xl my-auto">
+              <UploadWizard
+                existingApp={wizardTarget.app}
+                mode={wizardTarget.mode}
+                onSuccess={(savedApp) => {
+                  setApps((prev) => {
+                    const exists = prev.some((a) => a.id === savedApp.id);
+                    return exists
+                      ? prev.map((a) => (a.id === savedApp.id ? savedApp : a))
+                      : [savedApp, ...prev];
                 });
                 setWizardTarget(null);
                 loadDashboardData();
@@ -477,7 +494,8 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             />
           </div>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    )}
+  </>
+);
 };
